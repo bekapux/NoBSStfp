@@ -8,7 +8,9 @@
              xmlns:icon="using:Material.Icons.Avalonia"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:Class="NoBSSftp.Views.FileBrowserView"
-             x:DataType="vm:SessionViewModel">
+             x:DataType="vm:SessionViewModel"
+             x:Name="FileBrowserRoot"
+             DragDrop.AllowDrop="True">
     <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -98,27 +100,29 @@
                         <Setter.Value>
                             <ContextMenu x:DataType="models:FileEntry">
                                 <MenuItem Header="Download To..." 
-                                          Command="{Binding ((vm:SessionViewModel)DataContext).DownloadToCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          Command="{Binding #FileBrowserRoot.DataContext.DownloadToCommand}"
                                           CommandParameter="{Binding}"/>
                                 <Separator/>
                                 <MenuItem Header="Copy" 
-                                          Command="{Binding ((vm:SessionViewModel)DataContext).CopyCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          Command="{Binding #FileBrowserRoot.DataContext.CopyCommand}"
                                           CommandParameter="{Binding}"/>
                                 <MenuItem Header="Cut" 
-                                          Command="{Binding ((vm:SessionViewModel)DataContext).CutCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          Command="{Binding #FileBrowserRoot.DataContext.CutCommand}"
                                           CommandParameter="{Binding}"/>
                                 <MenuItem Header="Paste Into" 
-                                          Command="{Binding ((vm:SessionViewModel)DataContext).PasteIntoCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          Command="{Binding #FileBrowserRoot.DataContext.PasteIntoCommand}"
                                           CommandParameter="{Binding}"
                                           IsEnabled="{Binding IsDirectory}"/>
+                                <MenuItem Header="Paste" 
+                                          Command="{Binding #FileBrowserRoot.DataContext.PasteCommand}"/>
                                 <Separator/>
                                 <!-- Bind to named element's DataContext to avoid RelativeSource issues. 
                                      Pass current row's DataContext (FileEntry) as Parameter. -->
                                 <MenuItem Header="Rename" 
-                                          Command="{Binding ((vm:SessionViewModel)DataContext).RenameCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          Command="{Binding #FileBrowserRoot.DataContext.RenameCommand}"
                                           CommandParameter="{Binding}"/>
                                 <MenuItem Header="Delete" 
-                                          Command="{Binding ((vm:SessionViewModel)DataContext).DeleteCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          Command="{Binding #FileBrowserRoot.DataContext.DeleteCommand}"
                                           CommandParameter="{Binding}"/>
                             </ContextMenu>
                         </Setter.Value>

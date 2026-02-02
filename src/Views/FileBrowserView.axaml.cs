@@ -26,10 +26,10 @@ public partial class FileBrowserView : UserControl
     {
         InitializeComponent();
         _rootGrid = this.FindControl<Grid>("RootGrid");
-        AddHandler(DragDrop.DragOverEvent, OnDragOver);
-        AddHandler(DragDrop.DragEnterEvent, OnDragEnter);
-        AddHandler(DragDrop.DragLeaveEvent, OnDragLeave);
-        AddHandler(DragDrop.DropEvent, OnDrop);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DragEnterEvent, OnDragEnter, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DragLeaveEvent, OnDragLeave, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DropEvent, OnDrop, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
         DataContextChanged += OnDataContextChanged;
         UpdateTerminalRows(true);
@@ -162,10 +162,15 @@ public partial class FileBrowserView : UserControl
         if (HasExternalFiles(e.DataTransfer))
         {
             e.DragEffects = DragDropEffects.Copy;
+            e.Handled = true;
         }
         else
         {
-            e.DragEffects = DragDropEffects.None;
+            // If not external files, and NOT already handled (e.g. by Row for internal move), cancel it.
+            if (!e.Handled)
+            {
+                e.DragEffects = DragDropEffects.None;
+            }
         }
     }
 
