@@ -1,0 +1,206 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:NoBSSftp.ViewModels"
+             xmlns:views="using:NoBSSftp.Views"
+             xmlns:models="using:NoBSSftp.Models"
+             xmlns:icon="using:Material.Icons.Avalonia"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="NoBSSftp.Views.FileBrowserView"
+             x:DataType="vm:SessionViewModel">
+    <Grid x:Name="RootGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Connection Bar -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="5" Margin="5"
+            IsVisible="{Binding !IsConnected}">
+            <TextBox Text="{Binding Profile.Host}" Watermark="Host" Width="150" />
+            <TextBox Text="{Binding Profile.Username}" Watermark="User" Width="100" />
+            <TextBox Text="{Binding Profile.Password}" Watermark="Password" PasswordChar="*"
+                Width="100" IsVisible="{Binding !Profile.UsePrivateKey}" />
+            <CheckBox Content="Key" IsChecked="{Binding Profile.UsePrivateKey}" VerticalAlignment="Center"/>
+            <TextBox Text="{Binding Profile.PrivateKeyPath}" Watermark="Key path" Width="180"
+                IsVisible="{Binding Profile.UsePrivateKey}" />
+            <Button Content="Browse..." IsVisible="{Binding Profile.UsePrivateKey}"
+                Click="OnPickKeyPathClicked" />
+            <TextBox Text="{Binding Profile.PrivateKeyPassphrase}" Watermark="Key passphrase"
+                PasswordChar="*" Width="140" IsVisible="{Binding Profile.UsePrivateKey}" />
+            <Button Command="{Binding ConnectCommand}" Content="Connect" />
+        </StackPanel>
+
+        <!-- Navigation Bar & Disconnect -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="5" Margin="5"
+            IsVisible="{Binding IsConnected}">
+            <TextBlock Text="Path:" VerticalAlignment="Center" />
+            <TextBox Text="{Binding CurrentPath}" Width="300" />
+            <Button Command="{Binding RefreshFileListCommand}" Content="Refresh" />
+            <Button Command="{Binding DisconnectCommand}" Content="Disconnect" Background="#CC3333"
+                Foreground="White" />
+            <Button Content="Create...">
+                <Button.Flyout>
+                    <MenuFlyout>
+                        <MenuItem Header="File" Command="{Binding CreateFileCommand}" />
+                        <MenuItem Header="Folder" Command="{Binding CreateFolderCommand}" />
+                    </MenuFlyout>
+                </Button.Flyout>
+            </Button>
+            <ToggleButton IsChecked="{Binding ShowHiddenFiles}" ToolTip.Tip="Show Hidden Files" Padding="6">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                    <icon:MaterialIcon Kind="Eye" />
+                    <TextBlock Text="Hidden" VerticalAlignment="Center"/>
+                </StackPanel>
+            </ToggleButton>
+            <ToggleButton IsChecked="{Binding IsTerminalVisible}" ToolTip.Tip="Toggle Terminal" Padding="6">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                    <icon:MaterialIcon Kind="Console" />
+                    <TextBlock Text="Terminal" VerticalAlignment="Center"/>
+                </StackPanel>
+            </ToggleButton>
+        </StackPanel>
+
+        <!-- File List + Status -->
+        <Grid Grid.Row="2" RowDefinitions="*, Auto">
+            <Border Grid.Row="0" Background="Transparent" Margin="5" BorderThickness="1"
+                BorderBrush="Gray">
+            <Border.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Paste" Command="{Binding PasteCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Create File" Command="{Binding CreateFileCommand}"/>
+                    <MenuItem Header="Create Folder" Command="{Binding CreateFolderCommand}"/>
+                    <Separator/>
+                    <MenuItem Header="Refresh" Command="{Binding RefreshFileListCommand}"/>
+                </ContextMenu>
+            </Border.ContextMenu>
+            
+            <Grid>
+                <DataGrid x:Name="FileGrid" ItemsSource="{Binding Files}"
+                          SelectedItem="{Binding SelectedFile}"
+                          IsReadOnly="True"
+                          SelectionMode="Extended"
+                          GridLinesVisibility="All"
+                          BorderThickness="0" 
+                          SelectionChanged="OnSelectionChanged"
+                          DoubleTapped="OnDataGridDoubleTapped"
+                          DragDrop.AllowDrop="True">
+              
+              <!-- Styles to apply Context Menu to Rows -->
+              <DataGrid.Styles>
+                <Style Selector="DataGridRow">
+                    <Setter Property="ContextMenu">
+                        <Setter.Value>
+                            <ContextMenu x:DataType="models:FileEntry">
+                                <MenuItem Header="Download To..." 
+                                          Command="{Binding ((vm:SessionViewModel)DataContext).DownloadToCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          CommandParameter="{Binding}"/>
+                                <Separator/>
+                                <MenuItem Header="Copy" 
+                                          Command="{Binding ((vm:SessionViewModel)DataContext).CopyCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          CommandParameter="{Binding}"/>
+                                <MenuItem Header="Cut" 
+                                          Command="{Binding ((vm:SessionViewModel)DataContext).CutCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          CommandParameter="{Binding}"/>
+                                <MenuItem Header="Paste Into" 
+                                          Command="{Binding ((vm:SessionViewModel)DataContext).PasteIntoCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          CommandParameter="{Binding}"
+                                          IsEnabled="{Binding IsDirectory}"/>
+                                <Separator/>
+                                <!-- Bind to named element's DataContext to avoid RelativeSource issues. 
+                                     Pass current row's DataContext (FileEntry) as Parameter. -->
+                                <MenuItem Header="Rename" 
+                                          Command="{Binding ((vm:SessionViewModel)DataContext).RenameCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          CommandParameter="{Binding}"/>
+                                <MenuItem Header="Delete" 
+                                          Command="{Binding ((vm:SessionViewModel)DataContext).DeleteCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          CommandParameter="{Binding}"/>
+                            </ContextMenu>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+              </DataGrid.Styles>
+
+                    <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="Name" Width="*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="5,0"
+                                                Background="Transparent"
+                                                PointerPressed="OnRowPointerPressed"
+                                                PointerMoved="OnRowPointerMoved"
+                                                PointerReleased="OnRowPointerReleased"
+                                                DragDrop.AllowDrop="True"
+                                                DragDrop.DragOver="OnRowDragOver"
+                                                DragDrop.Drop="OnRowDrop">
+                                        <!-- Folder Icon -->
+                                        <icon:MaterialIcon Kind="Folder" Foreground="#E8A87C"
+                                                           IsVisible="{Binding IsDirectory}"
+                                                           Width="20" Height="20"/>
+                                        <!-- File Icon -->
+                                        <icon:MaterialIcon Kind="FileDocumentOutline" Foreground="Gray"
+                                                           IsVisible="{Binding !IsDirectory}"
+                                                           Width="20" Height="20"/>
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}"
+                                            Width="Auto" />
+                        <DataGridTextColumn Header="Date" Binding="{Binding LastWriteTime}"
+                                            Width="Auto" />
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- Drag Overlay -->
+                <Border x:Name="DragOverlay" Background="#99000000" IsVisible="False"
+                    IsHitTestVisible="False">
+                    <TextBlock Text="Drop files to upload" Foreground="White" FontSize="24"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" />
+                </Border>
+
+                <!-- Transfer Progress UI -->
+                <Border Background="#333333" BorderBrush="Black" BorderThickness="1"
+                    CornerRadius="8"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="20" Padding="15"
+                    IsVisible="{Binding IsTransferring}" Width="400" BoxShadow="0 4 10 0 #50000000">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="{Binding TransferTitle}" FontWeight="Bold"
+                            Foreground="White"
+                            HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
+
+                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding TransferProgress}"
+                            Height="10"
+                            Foreground="#007ACC" Background="#555555" />
+
+                        <Button Content="Cancel" Command="{Binding CancelTransferCommand}"
+                            HorizontalAlignment="Center" Foreground="White" Background="#CC3333" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Status Bar -->
+        <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Margin="5" Foreground="Gray" />
+        </Grid>
+
+        <!-- Terminal Splitter -->
+        <GridSplitter Grid.Row="3" Height="6" Background="#222222"
+                      HorizontalAlignment="Stretch"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      IsVisible="{Binding IsTerminalVisible}" />
+
+        <!-- SSH Terminal (Bottom) -->
+        <Border Grid.Row="4" Margin="5" BorderThickness="1" BorderBrush="#333333"
+                MinHeight="140" IsVisible="{Binding IsTerminalVisible}">
+            <views:TerminalView DataContext="{Binding Terminal}" />
+        </Border>
+    </Grid>
+</UserControl>

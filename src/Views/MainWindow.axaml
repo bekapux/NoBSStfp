@@ -1,0 +1,295 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:NoBSSftp.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:views="using:NoBSSftp.Views"
+        xmlns:icon="using:Material.Icons.Avalonia"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        x:Class="NoBSSftp.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        x:Name="Root"
+        Icon="/Assets/icon.ico"
+        Title="NoBSSftp">
+
+    <Window.Styles>
+        <Style Selector="Button.Flat">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="Button.Flat:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#FFBDBD"/> <!-- Light Red -->
+        </Style>
+        <Style Selector="Button.Flat:pointerover icon|MaterialIcon">
+            <Setter Property="Foreground" Value="#D50000"/> <!-- Darker Red Icon -->
+        </Style>
+        
+        <Style Selector="Border.TabHeader">
+            <Setter Property="Background" Value="#2B2B2B"/>
+            <Setter Property="BorderBrush" Value="#1E1E1E"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="5 2"/>
+            <Setter Property="Margin" Value="0 0 4 0"/>
+            <Setter Property="MinHeight" Value="22"/>
+        </Style>
+        <Style Selector="TabItem:selected Border.TabHeader">
+            <Setter Property="Background" Value="#2B2B2B"/>
+            <Setter Property="BorderBrush" Value="#1E1E1E"/>
+        </Style>
+        <Style Selector="Border.TabHeader:pointerover">
+            <Setter Property="Background" Value="#3A3A3A"/>
+        </Style>
+        <Style Selector="TextBlock.TabHeaderText">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="Button.TabClose">
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="MinHeight" Value="16"/>
+            <Setter Property="MinWidth" Value="16"/>
+        </Style>
+        <Style Selector="Button.AddTab">
+            <Setter Property="Background" Value="#F3F3F3"/>
+            <Setter Property="BorderBrush" Value="#D2D2D2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="8 4"/>
+            <Setter Property="Margin" Value="0 0 6 0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="Button.AddTab:pointerover">
+            <Setter Property="Background" Value="#EDEDED"/>
+        </Style>
+        <Style Selector="ListBox.ServerList > ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="4 1"/>
+        </Style>
+        <Style Selector="ListBoxItem.DropBefore">
+            <Setter Property="BorderBrush" Value="#4AA3FF"/>
+            <Setter Property="BorderThickness" Value="0,2,0,0"/>
+        </Style>
+        <Style Selector="ListBoxItem.DropAfter">
+            <Setter Property="BorderBrush" Value="#4AA3FF"/>
+            <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        </Style>
+        <Style Selector="Border.FolderDropTarget">
+            <Setter Property="BorderBrush" Value="#4AA3FF"/>
+            <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        </Style>
+        <Style Selector="Border.FolderHeader">
+            <Setter Property="Padding" Value="2 0"/>
+        </Style>
+        <Style Selector="Expander.FolderGroup /template/ ToggleButton#PART_toggle">
+            <Setter Property="MinHeight" Value="24"/>
+            <Setter Property="Padding" Value="4 0"/>
+        </Style>
+        <Style Selector="Expander.FolderGroup">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="MinHeight" Value="24"/>
+        </Style>
+        <Style Selector="Expander.FolderGroup /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Padding" Value="0"/>
+        </Style>
+        <Style Selector="ListBox.FolderList">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+        </Style>
+    </Window.Styles>
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto, *">
+      
+      <SplitView Grid.Row="1" DisplayMode="CompactInline" IsPaneOpen="{Binding IsSidebarOpen}"
+                 OpenPaneLength="250" CompactPaneLength="50">
+        <SplitView.Pane>
+            <Grid RowDefinitions="Auto, *">
+                <!-- Sidebar Header -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="5" Margin="5">
+                    <Button Command="{Binding ToggleSidebarCommand}" Width="40" Classes="Flat">
+                        <icon:MaterialIcon Kind="Menu" />
+                    </Button>
+                    <Button Command="{Binding AddServerCommand}" Width="40" ToolTip.Tip="Add Server"
+                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat">
+                        <icon:MaterialIcon Kind="Plus" />
+                    </Button>
+                    <Button Command="{Binding AddFolderCommand}" Width="40" ToolTip.Tip="Add Folder"
+                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat">
+                        <icon:MaterialIcon Kind="FolderPlus" />
+                    </Button>
+                    <TextBlock Text="Servers" VerticalAlignment="Center" FontWeight="Bold" 
+                               IsVisible="{Binding #Root.DataContext.IsSidebarOpen}"/>
+                </StackPanel>
+                
+                <!-- Server List -->
+                <StackPanel Grid.Row="1" Spacing="2">
+                     <ListBox x:Name="RootServerList"
+                              ItemsSource="{Binding RootServers}"
+                              Background="Transparent"
+                              MinHeight="24"
+                              Classes="ServerList"
+                              Tag="root"
+                              DragDrop.AllowDrop="True"
+                              DragDrop.DragOver="OnServerListDragOver"
+                              DragDrop.DragLeave="OnServerListDragLeave"
+                              DragDrop.Drop="OnServerListDrop"
+                              DoubleTapped="OnServerListDoubleTapped">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent">
+                                    <StackPanel.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Edit" 
+                                                      Command="{Binding #Root.DataContext.EditServerCommand}"
+                                                      CommandParameter="{Binding}"/>
+                                            <MenuItem Header="Delete" 
+                                                      Command="{Binding #Root.DataContext.DeleteServerCommand}"
+                                                      CommandParameter="{Binding}"/>
+                                        </ContextMenu>
+                                    </StackPanel.ContextMenu>
+                                    <!-- Icon -->
+                                    <icon:MaterialIcon Kind="ServerNetwork" Width="20" Height="20" />
+                                    <StackPanel IsVisible="{Binding #Root.DataContext.IsSidebarOpen}">
+                                        <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="12"/>
+                                        <TextBlock Text="{Binding Host}" FontSize="10" Foreground="Gray"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <ItemsControl ItemsSource="{Binding Folders}" HorizontalAlignment="Stretch">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Expander IsExpanded="True" HorizontalAlignment="Stretch" Classes="FolderGroup">
+                                    <Expander.Header>
+                                        <Border Background="Transparent"
+                                                HorizontalAlignment="Stretch"
+                                                Classes="FolderHeader"
+                                                Tag="FolderHeader"
+                                                DragDrop.AllowDrop="True"
+                                                DragDrop.DragOver="OnFolderHeaderDragOver"
+                                                DragDrop.DragLeave="OnFolderHeaderDragLeave"
+                                                DragDrop.Drop="OnFolderHeaderDrop">
+                                            <Border.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="Rename"
+                                                              Command="{Binding #Root.DataContext.RenameFolderCommand}"
+                                                              CommandParameter="{Binding}"/>
+                                                    <MenuItem Header="Delete"
+                                                              Command="{Binding #Root.DataContext.DeleteFolderCommand}"
+                                                              CommandParameter="{Binding}"/>
+                                                </ContextMenu>
+                                            </Border.ContextMenu>
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <icon:MaterialIcon Kind="Folder" Width="20" Height="20" />
+                                                <TextBlock Text="{Binding Name}" FontWeight="Bold"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Expander.Header>
+                                    <ListBox ItemsSource="{Binding Servers}"
+                                             Background="Transparent"
+                                             MinHeight="24"
+                                             Classes="ServerList FolderList"
+                                             Tag="{Binding}"
+                                             DragDrop.AllowDrop="True"
+                                             DragDrop.DragOver="OnServerListDragOver"
+                                             DragDrop.DragLeave="OnServerListDragLeave"
+                                             DragDrop.Drop="OnServerListDrop"
+                                             DoubleTapped="OnServerListDoubleTapped">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent">
+                                                    <StackPanel.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="Edit" 
+                                                                      Command="{Binding #Root.DataContext.EditServerCommand}"
+                                                                      CommandParameter="{Binding}"/>
+                                                            <MenuItem Header="Delete" 
+                                                                      Command="{Binding #Root.DataContext.DeleteServerCommand}"
+                                                                      CommandParameter="{Binding}"/>
+                                                        </ContextMenu>
+                                                    </StackPanel.ContextMenu>
+                                                    <icon:MaterialIcon Kind="ServerNetwork" Width="20" Height="20" />
+                                                    <StackPanel IsVisible="{Binding #Root.DataContext.IsSidebarOpen}">
+                                                        <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="12"/>
+                                                        <TextBlock Text="{Binding Host}" FontSize="10" Foreground="Gray"/>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Expander>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Grid>
+        </SplitView.Pane>
+
+        <SplitView.Content>
+            <Grid>
+                  <!-- Tabs -->
+                  <TabControl ItemsSource="{Binding TabItems}"
+                              SelectedItem="{Binding SelectedTabItem}">
+                    <TabControl.ItemTemplate>
+                      <DataTemplate>
+                        <ContentControl Content="{Binding}">
+                            <ContentControl.DataTemplates>
+                                <DataTemplate DataType="vm:SessionViewModel">
+                                    <Border Classes="TabHeader">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                          <TextBlock Classes="TabHeaderText"
+                                                     Text="{Binding Header}"
+                                                     VerticalAlignment="Center"/>
+                                          <Button Command="{Binding #Root.DataContext.CloseTabCommand}"
+                                                  CommandParameter="{Binding}"
+                                                  Classes="Flat TabClose"
+                                                  VerticalAlignment="Center"
+                                                  ToolTip.Tip="Close Tab">
+                                              <icon:MaterialIcon Kind="Close" Width="16" Height="16"
+                                                                 Foreground="White"/>
+                                          </Button>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                                <DataTemplate DataType="vm:AddTabViewModel">
+                                    <Button Classes="AddTab"
+                                            Command="{Binding #Root.DataContext.AddTabCommand}"
+                                            ToolTip.Tip="New Server">
+                                        <icon:MaterialIcon Kind="Plus" Width="18" Height="18"
+                                                           Foreground="#333333"/>
+                                    </Button>
+                                </DataTemplate>
+                            </ContentControl.DataTemplates>
+                        </ContentControl>
+                      </DataTemplate>
+                    </TabControl.ItemTemplate>
+                    
+                    <TabControl.ContentTemplate>
+                      <DataTemplate>
+                         <ContentControl Content="{Binding}">
+                             <ContentControl.DataTemplates>
+                                 <DataTemplate DataType="vm:SessionViewModel">
+                                    <views:FileBrowserView/>
+                                 </DataTemplate>
+                                 <DataTemplate DataType="vm:AddTabViewModel">
+                                    <Panel/>
+                                 </DataTemplate>
+                             </ContentControl.DataTemplates>
+                         </ContentControl>
+                      </DataTemplate>
+                    </TabControl.ContentTemplate>
+                  </TabControl>
+            </Grid>
+        </SplitView.Content>
+      </SplitView>
+    </Grid>
+
+</Window>

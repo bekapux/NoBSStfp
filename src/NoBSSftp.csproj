@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <ApplicationIcon>Assets/icon.ico</ApplicationIcon>
+        <SelfContained>true</SelfContained>
+        <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+        <PublishAot>true</PublishAot>
+        <TrimMode>link</TrimMode>
+        <NuGetAudit>false</NuGetAudit>
+        <NuGetAuditMode>None</NuGetAuditMode>
+        <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+        <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+        <UseAppHost>true</UseAppHost>
+        <TrimMode>link</TrimMode>
+        <IlcTrimMetadata>true</IlcTrimMetadata>
+        <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
+        <OptimizationPreference>Size</OptimizationPreference>
+        <StackTraceSupport>false</StackTraceSupport>
+        <UseSystemResourceKeys>true</UseSystemResourceKeys>
+        <EventSourceSupport>false</EventSourceSupport>
+        <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+        <DebugType>none</DebugType>
+        <NoWarn>$(NoWarn);IL2104;IL3053</NoWarn>
+        <DebugSymbols>false</DebugSymbols>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <Authors>Beka Pukhashvili</Authors>
+        <Company>No BS</Company>
+        <RootNamespace>NoBSSftp</RootNamespace>
+        <Version>0.1.0</Version>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <CFBundleName>NoBSSftp</CFBundleName>
+        <CFBundleDisplayName>NoBSSftp</CFBundleDisplayName>
+        <CFBundleIdentifier>com.nobs.sftp</CFBundleIdentifier>
+        <CFBundleShortVersionString>0.1.0</CFBundleShortVersionString>
+        <CFBundleVersion>0.1.0</CFBundleVersion>
+        <CFBundleIconFile>icon.ico</CFBundleIconFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Folder Include="Models\" />
+        <AvaloniaResource Include="Assets\**" />
+        <None Include="..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+        <None Include="..\LICENSE" Link="LICENSE">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia" Version="11.3.11" />
+        <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.3.11" />
+        <PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
+        <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
+        <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.11" />
+        <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.1" />
+        <PackageReference Include="DotNet.Bundle" Version="0.9.13" />
+        <PackageReference Include="Material.Icons.Avalonia" Version="2.4.1" />
+        <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    </ItemGroup>
+</Project>
