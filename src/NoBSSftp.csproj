@@ -36,12 +36,16 @@
         <CFBundleIdentifier>com.nobs.sftp</CFBundleIdentifier>
         <CFBundleShortVersionString>0.1.0</CFBundleShortVersionString>
         <CFBundleVersion>0.1.0</CFBundleVersion>
-        <CFBundleIconFile>icon.ico</CFBundleIconFile>
+        <CFBundleIconFile>NoBSSftp.icns</CFBundleIconFile>
     </PropertyGroup>
 
     <ItemGroup>
         <Folder Include="Models\" />
         <AvaloniaResource Include="Assets\**" />
+        <None Include="Assets\NoBSSftp.icns" Link="NoBSSftp.icns">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        </None>
         <None Include="..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
