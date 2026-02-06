@@ -52,6 +52,12 @@ public interface ISftpService
 public class SftpService : ISftpService
 {
     private SftpClient? _sftpClient;
+    private readonly IHostKeyTrustService _hostKeyTrustService;
+
+    public SftpService()
+    {
+        _hostKeyTrustService = new HostKeyTrustService();
+    }
 
     public bool IsConnected => _sftpClient?.IsConnected ?? false;
 
@@ -83,6 +89,11 @@ public class SftpService : ISftpService
             }
 
             _sftpClient = new SftpClient(connectionInfo);
+            _sftpClient.HostKeyReceived +=
+                (_, args) =>
+                {
+                    args.CanTrust = _hostKeyTrustService.IsTrustedHostKey(profile, args);
+                };
             _sftpClient.Connect();
         });
     }
@@ -366,6 +377,11 @@ public class SftpService : ISftpService
         }
 
         var client = new SshClient(connectionInfo);
+        client.HostKeyReceived +=
+            (_, args) =>
+            {
+                args.CanTrust = _hostKeyTrustService.IsTrustedHostKey(profile, args);
+            };
         client.Connect();
         return client;
     }

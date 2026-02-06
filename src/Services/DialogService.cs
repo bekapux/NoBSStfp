@@ -161,6 +161,89 @@ public class DialogService : IDialogService
         return confirmed;
     }
 
+    public async Task<bool> ConfirmHostKeyAsync(string title,
+        string message,
+        string details,
+        bool isWarning)
+    {
+        var window =
+            new Window
+            {
+                Title = title,
+                Width = 620,
+                Height = 360,
+                MinWidth = 620,
+                MinHeight = 360,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                SystemDecorations = SystemDecorations.BorderOnly
+            };
+
+        var stack = new StackPanel { Margin = new Thickness(12), Spacing = 10 };
+        var messageBlock = new TextBlock
+        {
+            Text = message,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            FontWeight = Avalonia.Media.FontWeight.SemiBold
+        };
+        var detailsBorder =
+            new Border
+            {
+                BorderThickness = new Thickness(1),
+                BorderBrush = isWarning ? Avalonia.Media.Brushes.IndianRed : Avalonia.Media.Brushes.Gray,
+                Background = Avalonia.Media.Brushes.Black,
+                Padding = new Thickness(8),
+                MinHeight = 180
+            };
+        var detailsScroll =
+            new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                Content =
+                    new TextBlock
+                    {
+                        Text = details,
+                        TextWrapping = Avalonia.Media.TextWrapping.NoWrap,
+                        FontFamily = "Menlo,Consolas,Courier New,monospace",
+                        Foreground = Avalonia.Media.Brushes.White
+                    }
+            };
+        detailsBorder.Child = detailsScroll;
+
+        var btnPanel =
+            new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Spacing = 10
+            };
+        var trustBtn = new Button { Content = "Trust and Continue", IsDefault = true };
+        var rejectBtn = new Button { Content = "Reject", IsCancel = true };
+
+        btnPanel.Children.Add(trustBtn);
+        btnPanel.Children.Add(rejectBtn);
+        stack.Children.Add(messageBlock);
+        stack.Children.Add(detailsBorder);
+        stack.Children.Add(btnPanel);
+        window.Content = stack;
+
+        var trusted = false;
+        trustBtn.Click += (_, _) =>
+        {
+            trusted = true;
+            window.Close();
+        };
+        rejectBtn.Click += (_, _) => { window.Close(); };
+
+        var owner = GetMainWindow();
+        if (owner is not null)
+            await window.ShowDialog(owner);
+        else
+            window.Show();
+
+        return trusted;
+    }
+
     public async Task<ConflictChoice> ConfirmConflictAsync(string title,
         string message,
         string sourceDetails,
