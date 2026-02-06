@@ -13,6 +13,7 @@ public interface ISftpService
 {
     bool IsConnected { get; }
     Task ConnectAsync(ServerProfile profile);
+    Task<string> GetCurrentDirectoryAsync();
     Task DisconnectAsync();
     Task<List<FileEntry>> ListDirectoryAsync(string path);
 
@@ -67,10 +68,11 @@ public class SftpService : ISftpService
                 if (string.IsNullOrWhiteSpace(profile.PrivateKeyPath))
                     throw new InvalidOperationException("Private key path is required for key authentication.");
 
+                var keyPath = ResolvePrivateKeyPath(profile.PrivateKeyPath);
                 var keyFile =
                     string.IsNullOrEmpty(profile.PrivateKeyPassphrase)
-                        ? new PrivateKeyFile(profile.PrivateKeyPath)
-                        : new PrivateKeyFile(profile.PrivateKeyPath, profile.PrivateKeyPassphrase);
+                        ? new PrivateKeyFile(keyPath)
+                        : new PrivateKeyFile(keyPath, profile.PrivateKeyPassphrase);
                 var keyAuth = new PrivateKeyAuthenticationMethod(profile.Username, keyFile);
                 connectionInfo = new ConnectionInfo(profile.Host, profile.Port, profile.Username, keyAuth);
             }
@@ -93,6 +95,14 @@ public class SftpService : ISftpService
             _sftpClient?.Dispose();
             _sftpClient = null;
         });
+    }
+
+    public async Task<string> GetCurrentDirectoryAsync()
+    {
+        if (_sftpClient is not { IsConnected: true })
+            throw new InvalidOperationException("Not connected");
+
+        return await Task.Run(() => _sftpClient.WorkingDirectory);
     }
 
     public async Task<List<FileEntry>> ListDirectoryAsync(string path)
@@ -341,10 +351,11 @@ public class SftpService : ISftpService
             if (string.IsNullOrWhiteSpace(profile.PrivateKeyPath))
                 throw new InvalidOperationException("Private key path is required for key authentication.");
 
+            var keyPath = ResolvePrivateKeyPath(profile.PrivateKeyPath);
             var keyFile =
                 string.IsNullOrEmpty(profile.PrivateKeyPassphrase)
-                    ? new PrivateKeyFile(profile.PrivateKeyPath)
-                    : new PrivateKeyFile(profile.PrivateKeyPath, profile.PrivateKeyPassphrase);
+                    ? new PrivateKeyFile(keyPath)
+                    : new PrivateKeyFile(keyPath, profile.PrivateKeyPassphrase);
             var keyAuth = new PrivateKeyAuthenticationMethod(profile.Username, keyFile);
             connectionInfo = new ConnectionInfo(profile.Host, profile.Port, profile.Username, keyAuth);
         }
@@ -357,5 +368,55 @@ public class SftpService : ISftpService
         var client = new SshClient(connectionInfo);
         client.Connect();
         return client;
+    }
+
+    private static string ResolvePrivateKeyPath(string configuredPath)
+    {
+        var normalized = NormalizePrivateKeyPath(configuredPath);
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new InvalidOperationException("Private key path is required for key authentication.");
+
+        if (!File.Exists(normalized))
+            throw new InvalidOperationException($"Private key file was not found: {normalized}");
+
+        return normalized;
+    }
+
+    private static string NormalizePrivateKeyPath(string rawPath)
+    {
+        var path = rawPath.Trim();
+
+        if (path.Length >= 2 &&
+            ((path.StartsWith('"') && path.EndsWith('"')) ||
+             (path.StartsWith('\'') && path.EndsWith('\''))))
+        {
+            path = path[1..^1];
+        }
+
+        path = Environment.ExpandEnvironmentVariables(path);
+
+        if (path == "~")
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(home))
+                path = home;
+        }
+        else if (path.StartsWith("~/", StringComparison.Ordinal) ||
+                 path.StartsWith("~\\", StringComparison.Ordinal))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(home))
+            {
+                var relative = path[2..]
+                    .Replace('\\', Path.DirectorySeparatorChar)
+                    .Replace('/', Path.DirectorySeparatorChar);
+                path = Path.Combine(home, relative);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(path) && !Path.IsPathRooted(path))
+            path = Path.GetFullPath(path);
+
+        return path;
     }
 }

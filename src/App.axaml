@@ -13,5 +13,11 @@
         <FluentTheme />
         <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
         <materialIcons:MaterialIconStyles />
+        <Style Selector=":is(TemplatedControl)">
+            <Setter Property="FontFamily" Value="Menlo,Consolas,Courier New" />
+        </Style>
+        <Style Selector="TextBlock">
+            <Setter Property="FontFamily" Value="Menlo,Consolas,Courier New" />
+        </Style>
     </Application.Styles>
 </Application>

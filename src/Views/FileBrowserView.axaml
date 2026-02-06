@@ -3,44 +3,43 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:NoBSSftp.ViewModels"
-             xmlns:views="using:NoBSSftp.Views"
              xmlns:models="using:NoBSSftp.Models"
              xmlns:icon="using:Material.Icons.Avalonia"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:Class="NoBSSftp.Views.FileBrowserView"
              x:DataType="vm:SessionViewModel"
              x:Name="FileBrowserRoot"
+             FontFamily="Menlo,Consolas,Courier New"
              DragDrop.AllowDrop="True">
-    <Grid x:Name="RootGrid">
+    <Grid x:Name="RootGrid" Background="#1E1E1E">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Connection Bar -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="5" Margin="5"
+        <StackPanel Grid.Row="0" Spacing="6" Margin="5,10,5,5"
             IsVisible="{Binding !IsConnected}">
-            <TextBox Text="{Binding Profile.Host}" Watermark="Host" Width="150" />
-            <TextBox Text="{Binding Profile.Username}" Watermark="User" Width="100" />
-            <TextBox Text="{Binding Profile.Password}" Watermark="Password" PasswordChar="*"
-                Width="100" IsVisible="{Binding !Profile.UsePrivateKey}" />
-            <CheckBox Content="Key" IsChecked="{Binding Profile.UsePrivateKey}" VerticalAlignment="Center"/>
-            <TextBox Text="{Binding Profile.PrivateKeyPath}" Watermark="Key path" Width="180"
-                IsVisible="{Binding Profile.UsePrivateKey}" />
-            <Button Content="Browse..." IsVisible="{Binding Profile.UsePrivateKey}"
-                Click="OnPickKeyPathClicked" />
-            <TextBox Text="{Binding Profile.PrivateKeyPassphrase}" Watermark="Key passphrase"
-                PasswordChar="*" Width="140" IsVisible="{Binding Profile.UsePrivateKey}" />
-            <Button Command="{Binding ConnectCommand}" Content="Connect" />
+            <StackPanel Orientation="Horizontal" Spacing="5">
+                <TextBox Text="{Binding Profile.Host}" Watermark="Host" Width="150" />
+                <TextBox Text="{Binding Profile.Username}" Watermark="User" Width="100" />
+                <TextBox x:Name="ConnectPasswordBox" Text="{Binding Profile.Password}" Watermark="Password" PasswordChar="*"
+                    Width="100" IsVisible="{Binding !Profile.UsePrivateKey}" />
+                <CheckBox Content="Key" IsChecked="{Binding Profile.UsePrivateKey}" VerticalAlignment="Center"/>
+                <TextBox x:Name="ConnectKeyPathBox" Text="{Binding Profile.PrivateKeyPath}" Watermark="Key path" Width="180"
+                    IsVisible="{Binding Profile.UsePrivateKey}" />
+                <Button Content="Browse..." IsVisible="{Binding Profile.UsePrivateKey}"
+                    Click="OnPickKeyPathClicked" />
+                <TextBox x:Name="ConnectKeyPassphraseBox" Text="{Binding Profile.PrivateKeyPassphrase}" Watermark="Key passphrase"
+                    PasswordChar="*" Width="140" IsVisible="{Binding Profile.UsePrivateKey}" />
+                <Button Command="{Binding ConnectCommand}" Content="Connect" />
+            </StackPanel>
         </StackPanel>
 
         <!-- Navigation Bar & Disconnect -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="5" Margin="5"
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="5" Margin="5,10,5,5"
             IsVisible="{Binding IsConnected}">
-            <TextBlock Text="Path:" VerticalAlignment="Center" />
             <TextBox Text="{Binding CurrentPath}" Width="300" />
             <Button Command="{Binding RefreshFileListCommand}" Content="Refresh" />
             <Button Command="{Binding DisconnectCommand}" Content="Disconnect" Background="#CC3333"
@@ -59,152 +58,277 @@
                     <TextBlock Text="Hidden" VerticalAlignment="Center"/>
                 </StackPanel>
             </ToggleButton>
-            <ToggleButton IsChecked="{Binding IsTerminalVisible}" ToolTip.Tip="Toggle Terminal" Padding="6">
+            <Button Command="{Binding OpenExternalTerminalCommand}" ToolTip.Tip="Open OS Terminal" Padding="6">
                 <StackPanel Orientation="Horizontal" Spacing="5">
                     <icon:MaterialIcon Kind="Console" />
                     <TextBlock Text="Terminal" VerticalAlignment="Center"/>
                 </StackPanel>
-            </ToggleButton>
+            </Button>
         </StackPanel>
 
-        <!-- File List + Status -->
-        <Grid Grid.Row="2" RowDefinitions="*, Auto">
+        <!-- Connected File Explorer -->
+        <Grid Grid.Row="2" RowDefinitions="*, Auto" IsVisible="{Binding IsConnected}">
             <Border Grid.Row="0" Background="Transparent" Margin="5" BorderThickness="1"
                 BorderBrush="Gray">
-            <Border.ContextMenu>
-                <ContextMenu>
-                    <MenuItem Header="Paste" Command="{Binding PasteCommand}"/>
-                    <Separator/>
-                    <MenuItem Header="Create File" Command="{Binding CreateFileCommand}"/>
-                    <MenuItem Header="Create Folder" Command="{Binding CreateFolderCommand}"/>
-                    <Separator/>
-                    <MenuItem Header="Refresh" Command="{Binding RefreshFileListCommand}"/>
-                </ContextMenu>
-            </Border.ContextMenu>
-            
-            <Grid>
-                <DataGrid x:Name="FileGrid" ItemsSource="{Binding Files}"
-                          SelectedItem="{Binding SelectedFile}"
-                          IsReadOnly="True"
-                          SelectionMode="Extended"
-                          GridLinesVisibility="All"
-                          BorderThickness="0" 
-                          SelectionChanged="OnSelectionChanged"
-                          DoubleTapped="OnDataGridDoubleTapped"
-                          DragDrop.AllowDrop="True">
-              
-              <!-- Styles to apply Context Menu to Rows -->
-              <DataGrid.Styles>
-                <Style Selector="DataGridRow">
-                    <Setter Property="ContextMenu">
-                        <Setter.Value>
-                            <ContextMenu x:DataType="models:FileEntry">
-                                <MenuItem Header="Download To..." 
-                                          Command="{Binding #FileBrowserRoot.DataContext.DownloadToCommand}"
-                                          CommandParameter="{Binding}"/>
-                                <Separator/>
-                                <MenuItem Header="Copy" 
-                                          Command="{Binding #FileBrowserRoot.DataContext.CopyCommand}"
-                                          CommandParameter="{Binding}"/>
-                                <MenuItem Header="Cut" 
-                                          Command="{Binding #FileBrowserRoot.DataContext.CutCommand}"
-                                          CommandParameter="{Binding}"/>
-                                <MenuItem Header="Paste Into" 
-                                          Command="{Binding #FileBrowserRoot.DataContext.PasteIntoCommand}"
-                                          CommandParameter="{Binding}"
-                                          IsEnabled="{Binding IsDirectory}"/>
-                                <MenuItem Header="Paste" 
-                                          Command="{Binding #FileBrowserRoot.DataContext.PasteCommand}"/>
-                                <Separator/>
-                                <!-- Bind to named element's DataContext to avoid RelativeSource issues. 
-                                     Pass current row's DataContext (FileEntry) as Parameter. -->
-                                <MenuItem Header="Rename" 
-                                          Command="{Binding #FileBrowserRoot.DataContext.RenameCommand}"
-                                          CommandParameter="{Binding}"/>
-                                <MenuItem Header="Delete" 
-                                          Command="{Binding #FileBrowserRoot.DataContext.DeleteCommand}"
-                                          CommandParameter="{Binding}"/>
-                            </ContextMenu>
-                        </Setter.Value>
-                    </Setter>
-                </Style>
-              </DataGrid.Styles>
+                <Border.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Paste" Command="{Binding PasteCommand}"/>
+                        <Separator/>
+                        <MenuItem Header="Create File" Command="{Binding CreateFileCommand}"/>
+                        <MenuItem Header="Create Folder" Command="{Binding CreateFolderCommand}"/>
+                        <Separator/>
+                        <MenuItem Header="Refresh" Command="{Binding RefreshFileListCommand}"/>
+                    </ContextMenu>
+                </Border.ContextMenu>
 
-                    <DataGrid.Columns>
-                        <DataGridTemplateColumn Header="Name" Width="*">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="5,0"
-                                                Background="Transparent"
-                                                PointerPressed="OnRowPointerPressed"
-                                                PointerMoved="OnRowPointerMoved"
-                                                PointerReleased="OnRowPointerReleased"
-                                                DragDrop.AllowDrop="True"
-                                                DragDrop.DragOver="OnRowDragOver"
-                                                DragDrop.Drop="OnRowDrop">
-                                        <!-- Folder Icon -->
-                                        <icon:MaterialIcon Kind="Folder" Foreground="#E8A87C"
-                                                           IsVisible="{Binding IsDirectory}"
-                                                           Width="20" Height="20"/>
-                                        <!-- File Icon -->
-                                        <icon:MaterialIcon Kind="FileDocumentOutline" Foreground="Gray"
-                                                           IsVisible="{Binding !IsDirectory}"
-                                                           Width="20" Height="20"/>
-                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
-                        <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}"
-                                            Width="Auto" />
-                        <DataGridTextColumn Header="Date" Binding="{Binding LastWriteTime}"
-                                            Width="Auto" />
-                    </DataGrid.Columns>
-                </DataGrid>
+                <Grid>
+                    <DataGrid x:Name="FileGrid" ItemsSource="{Binding Files}"
+                              SelectedItem="{Binding SelectedFile}"
+                              IsReadOnly="True"
+                              SelectionMode="Extended"
+                              GridLinesVisibility="All"
+                              BorderThickness="0"
+                              SelectionChanged="OnSelectionChanged"
+                              DoubleTapped="OnDataGridDoubleTapped"
+                              DragDrop.AllowDrop="True">
 
-                <!-- Drag Overlay -->
-                <Border x:Name="DragOverlay" Background="#99000000" IsVisible="False"
-                    IsHitTestVisible="False">
-                    <TextBlock Text="Drop files to upload" Foreground="White" FontSize="24"
-                        HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" />
-                </Border>
+                        <!-- Styles to apply Context Menu to Rows -->
+                        <DataGrid.Styles>
+                            <Style Selector="DataGridRow">
+                                <Setter Property="ContextMenu">
+                                    <Setter.Value>
+                                        <ContextMenu x:DataType="models:FileEntry">
+                                            <MenuItem Header="Download To..."
+                                                      Command="{Binding #FileBrowserRoot.DataContext.DownloadToCommand}"
+                                                      CommandParameter="{Binding}"/>
+                                            <Separator/>
+                                            <MenuItem Header="Copy"
+                                                      Command="{Binding #FileBrowserRoot.DataContext.CopyCommand}"
+                                                      CommandParameter="{Binding}"/>
+                                            <MenuItem Header="Cut"
+                                                      Command="{Binding #FileBrowserRoot.DataContext.CutCommand}"
+                                                      CommandParameter="{Binding}"/>
+                                            <MenuItem Header="Paste Into"
+                                                      Command="{Binding #FileBrowserRoot.DataContext.PasteIntoCommand}"
+                                                      CommandParameter="{Binding}"
+                                                      IsEnabled="{Binding IsDirectory}"/>
+                                            <MenuItem Header="Paste"
+                                                      Command="{Binding #FileBrowserRoot.DataContext.PasteCommand}"/>
+                                            <Separator/>
+                                            <!-- Bind to named element's DataContext to avoid RelativeSource issues.
+                                                 Pass current row's DataContext (FileEntry) as Parameter. -->
+                                            <MenuItem Header="Rename"
+                                                      Command="{Binding #FileBrowserRoot.DataContext.RenameCommand}"
+                                                      CommandParameter="{Binding}"/>
+                                            <MenuItem Header="Delete"
+                                                      Command="{Binding #FileBrowserRoot.DataContext.DeleteCommand}"
+                                                      CommandParameter="{Binding}"/>
+                                        </ContextMenu>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                            <Style Selector="DataGridRow.DropTargetRow">
+                                <Setter Property="Background" Value="#2A4AA3FF"/>
+                            </Style>
+                        </DataGrid.Styles>
 
-                <!-- Transfer Progress UI -->
-                <Border Background="#333333" BorderBrush="Black" BorderThickness="1"
-                    CornerRadius="8"
-                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="20" Padding="15"
-                    IsVisible="{Binding IsTransferring}" Width="400" BoxShadow="0 4 10 0 #50000000">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="{Binding TransferTitle}" FontWeight="Bold"
-                            Foreground="White"
-                            HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Name" Width="*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="5,0"
+                                                    Background="Transparent"
+                                                    PointerPressed="OnRowPointerPressed"
+                                                    PointerMoved="OnRowPointerMoved"
+                                                    PointerReleased="OnRowPointerReleased"
+                                                    DragDrop.AllowDrop="True"
+                                                    DragDrop.DragOver="OnRowDragOver"
+                                                    DragDrop.Drop="OnRowDrop">
+                                            <!-- Folder Icon -->
+                                            <icon:MaterialIcon Kind="Folder" Foreground="#E8A87C"
+                                                               IsVisible="{Binding IsDirectory}"
+                                                               Width="20" Height="20"/>
+                                            <!-- File Icon -->
+                                            <icon:MaterialIcon Kind="FileDocumentOutline" Foreground="Gray"
+                                                               IsVisible="{Binding !IsDirectory}"
+                                                               Width="20" Height="20"/>
+                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}"
+                                                Width="Auto" />
+                            <DataGridTextColumn Header="Date" Binding="{Binding LastWriteTime}"
+                                                Width="Auto" />
+                        </DataGrid.Columns>
+                    </DataGrid>
 
-                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding TransferProgress}"
-                            Height="10"
-                            Foreground="#007ACC" Background="#555555" />
+                    <!-- Drag Overlay -->
+                    <Border x:Name="DragOverlay" Background="#99000000" IsVisible="False"
+                        IsHitTestVisible="False">
+                        <TextBlock Text="Drop files to upload" Foreground="White" FontSize="24"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" />
+                    </Border>
 
-                        <Button Content="Cancel" Command="{Binding CancelTransferCommand}"
-                            HorizontalAlignment="Center" Foreground="White" Background="#CC3333" />
-                    </StackPanel>
-                </Border>
-            </Grid>
-        </Border>
+                    <!-- Transfer Progress UI -->
+                    <Border Background="#333333" BorderBrush="Black" BorderThickness="1"
+                        CornerRadius="0"
+                        HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="20" Padding="15"
+                        IsVisible="{Binding IsTransferring}" Width="400" BoxShadow="0 4 10 0 #50000000">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="{Binding TransferTitle}" FontWeight="Bold"
+                                Foreground="White"
+                                HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
 
-        <!-- Status Bar -->
-        <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Margin="5" Foreground="Gray" />
+                            <ProgressBar Minimum="0" Maximum="100" Value="{Binding TransferProgress}"
+                                Height="10"
+                                Foreground="#007ACC" Background="#555555" />
+
+                            <Button Content="Cancel" Command="{Binding CancelTransferCommand}"
+                                HorizontalAlignment="Center" Foreground="White" Background="#CC3333" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- Status Bar -->
+            <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Margin="5" Foreground="Gray" />
         </Grid>
 
-        <!-- Terminal Splitter -->
-        <GridSplitter Grid.Row="3" Height="6" Background="#222222"
-                      HorizontalAlignment="Stretch"
-                      ResizeDirection="Rows"
-                      ResizeBehavior="PreviousAndNext"
-                      IsVisible="{Binding IsTerminalVisible}" />
+        <!-- Disconnected Suggestions -->
+        <Grid Grid.Row="2" IsVisible="{Binding !IsConnected}" Margin="5">
+            <TextBlock IsVisible="{Binding !HasSuggestedServerPrimary}"
+                       Text="No saved servers"
+                       FontSize="12"
+                       Foreground="#8A929B"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
 
-        <!-- SSH Terminal (Bottom) -->
-        <Border Grid.Row="4" Margin="5" BorderThickness="1" BorderBrush="#333333"
-                MinHeight="140" IsVisible="{Binding IsTerminalVisible}">
-            <views:TerminalView DataContext="{Binding Terminal}" />
-        </Border>
+            <Grid IsVisible="{Binding HasSingleSuggestedServer}"
+                  ColumnDefinitions="*,Auto,*"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Center">
+                <Button Grid.Column="1"
+                        Width="190"
+                        Height="190"
+                        Command="{Binding ConnectSuggestionCommand}"
+                        CommandParameter="{Binding SuggestedServerPrimary}"
+                        CornerRadius="0"
+                        Background="#101010"
+                        BorderBrush="#2A2A2A"
+                        BorderThickness="1">
+                    <StackPanel Spacing="8"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <icon:MaterialIcon Kind="ServerNetwork"
+                                           Width="28"
+                                           Height="28"
+                                           Foreground="#9AA4B1"
+                                           HorizontalAlignment="Center"/>
+                        <TextBlock Text="{Binding SuggestedServerPrimary.Name}"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding SuggestedServerPrimary.Host}"
+                                   FontSize="11"
+                                   Foreground="#8A929B"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding SuggestedServerPrimary.Username}"
+                                   FontSize="11"
+                                   Foreground="#8A929B"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+
+            <Grid IsVisible="{Binding HasTwoSuggestedServers}"
+                  ColumnDefinitions="*,Auto,*,Auto,*"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Center">
+                <Button Grid.Column="1"
+                        Width="190"
+                        Height="190"
+                        Command="{Binding ConnectSuggestionCommand}"
+                        CommandParameter="{Binding SuggestedServerPrimary}"
+                        CornerRadius="0"
+                        Background="#101010"
+                        BorderBrush="#2A2A2A"
+                        BorderThickness="1">
+                    <StackPanel Spacing="8"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <icon:MaterialIcon Kind="ServerNetwork"
+                                           Width="28"
+                                           Height="28"
+                                           Foreground="#9AA4B1"
+                                           HorizontalAlignment="Center"/>
+                        <TextBlock Text="{Binding SuggestedServerPrimary.Name}"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding SuggestedServerPrimary.Host}"
+                                   FontSize="11"
+                                   Foreground="#8A929B"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding SuggestedServerPrimary.Username}"
+                                   FontSize="11"
+                                   Foreground="#8A929B"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="3"
+                        Width="190"
+                        Height="190"
+                        Command="{Binding ConnectSuggestionCommand}"
+                        CommandParameter="{Binding SuggestedServerSecondary}"
+                        CornerRadius="0"
+                        Background="#101010"
+                        BorderBrush="#2A2A2A"
+                        BorderThickness="1">
+                    <StackPanel Spacing="8"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <icon:MaterialIcon Kind="ServerNetwork"
+                                           Width="28"
+                                           Height="28"
+                                           Foreground="#9AA4B1"
+                                           HorizontalAlignment="Center"/>
+                        <TextBlock Text="{Binding SuggestedServerSecondary.Name}"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding SuggestedServerSecondary.Host}"
+                                   FontSize="11"
+                                   Foreground="#8A929B"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding SuggestedServerSecondary.Username}"
+                                   FontSize="11"
+                                   Foreground="#8A929B"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Grid>
+
     </Grid>
 </UserControl>

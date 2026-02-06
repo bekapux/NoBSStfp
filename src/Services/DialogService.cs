@@ -235,21 +235,24 @@ public class DialogService : IDialogService
             {
                 Title = existing is null ? "Add Server" : "Edit Server",
                 Width = 420,
-                Height = 520,
+                MinWidth = 420,
+                SizeToContent = SizeToContent.Height,
+                CanResize = false,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 SystemDecorations = SystemDecorations.BorderOnly
             };
 
         var stack = new StackPanel { Margin = new Thickness(20), Spacing = 10 };
-        var scroll = new ScrollViewer { Content = stack };
 
         var aliasBox = new TextBox { Watermark = "Server Alias (Name)", Text = existing?.Name ?? "" };
         var hostBox = new TextBox { Watermark = "Server IP Address / Host", Text = existing?.Host ?? "" };
         var portBox = new TextBox { Watermark = "Port", Text = existing?.Port.ToString() ?? "22" };
         var userBox = new TextBox { Watermark = "Username", Text = existing?.Username ?? "root" };
         var useKeyBox = new CheckBox { Content = "Use private key", IsChecked = existing?.UsePrivateKey ?? false };
+        var keyPathLabel = new TextBlock { Text = "Private Key Path:" };
         var keyPathBox = new TextBox { Watermark = "Private key path", Text = existing?.PrivateKeyPath ?? "" };
         var keyBrowseBtn = new Button { Content = "Browse..." };
+        var keyPassLabel = new TextBlock { Text = "Key Passphrase:" };
         var keyPassBox =
             new TextBox
             {
@@ -265,12 +268,21 @@ public class DialogService : IDialogService
         stack.Children.Add(new TextBlock { Text = "Username:" });
         stack.Children.Add(userBox);
         stack.Children.Add(useKeyBox);
-        stack.Children.Add(new TextBlock { Text = "Private Key Path:" });
-        var keyPathRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        stack.Children.Add(keyPathLabel);
+        var keyPathRow =
+            new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                ColumnSpacing = 8
+            };
+        keyPathBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+        Grid.SetColumn(keyPathBox, 0);
+        Grid.SetColumn(keyBrowseBtn, 1);
         keyPathRow.Children.Add(keyPathBox);
         keyPathRow.Children.Add(keyBrowseBtn);
         stack.Children.Add(keyPathRow);
-        stack.Children.Add(new TextBlock { Text = "Key Passphrase:" });
+        stack.Children.Add(keyPassLabel);
         stack.Children.Add(keyPassBox);
 
         var btnPanel =
@@ -285,13 +297,15 @@ public class DialogService : IDialogService
         btnPanel.Children.Add(saveBtn);
         btnPanel.Children.Add(cancelBtn);
         stack.Children.Add(btnPanel);
-        window.Content = scroll;
+        window.Content = stack;
 
         void UpdateVisibility()
         {
             var useKey = useKeyBox.IsChecked ?? false;
+            keyPathLabel.IsVisible = useKey;
             keyPathBox.IsVisible = useKey;
             keyBrowseBtn.IsVisible = useKey;
+            keyPassLabel.IsVisible = useKey;
             keyPassBox.IsVisible = useKey;
         }
 
@@ -353,19 +367,22 @@ public class DialogService : IDialogService
             {
                 Title = title,
                 Width = 380,
-                Height = 360,
+                MinWidth = 380,
+                SizeToContent = SizeToContent.Height,
+                CanResize = false,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 SystemDecorations = SystemDecorations.BorderOnly
             };
 
         var stack = new StackPanel { Margin = new Thickness(20), Spacing = 10 };
-        var scroll = new ScrollViewer { Content = stack };
 
         var userBox = new TextBox { Text = defaults?.Username ?? "root" };
         var useKeyBox = new CheckBox { Content = "Use private key", IsChecked = defaults?.UsePrivateKey ?? false };
         var passBox = new TextBox { PasswordChar = '*', Watermark = "Password" };
+        var keyPathLabel = new TextBlock { Text = "Private Key Path:" };
         var keyPathBox = new TextBox { Watermark = "Private key path", Text = defaults?.PrivateKeyPath ?? "" };
         var keyBrowseBtn = new Button { Content = "Browse..." };
+        var keyPassLabel = new TextBlock { Text = "Key Passphrase:" };
         var keyPassBox =
             new TextBox
             {
@@ -378,12 +395,21 @@ public class DialogService : IDialogService
         stack.Children.Add(useKeyBox);
         stack.Children.Add(new TextBlock { Text = "Password:" });
         stack.Children.Add(passBox);
-        stack.Children.Add(new TextBlock { Text = "Private Key Path:" });
-        var keyPathRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        stack.Children.Add(keyPathLabel);
+        var keyPathRow =
+            new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                ColumnSpacing = 8
+            };
+        keyPathBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+        Grid.SetColumn(keyPathBox, 0);
+        Grid.SetColumn(keyBrowseBtn, 1);
         keyPathRow.Children.Add(keyPathBox);
         keyPathRow.Children.Add(keyBrowseBtn);
         stack.Children.Add(keyPathRow);
-        stack.Children.Add(new TextBlock { Text = "Key Passphrase:" });
+        stack.Children.Add(keyPassLabel);
         stack.Children.Add(keyPassBox);
 
         var btnPanel =
@@ -398,14 +424,16 @@ public class DialogService : IDialogService
         btnPanel.Children.Add(connectBtn);
         btnPanel.Children.Add(cancelBtn);
         stack.Children.Add(btnPanel);
-        window.Content = scroll;
+        window.Content = stack;
 
         void UpdateVisibility()
         {
             var useKey = useKeyBox.IsChecked ?? false;
             passBox.IsVisible = !useKey;
+            keyPathLabel.IsVisible = useKey;
             keyPathBox.IsVisible = useKey;
             keyBrowseBtn.IsVisible = useKey;
+            keyPassLabel.IsVisible = useKey;
             keyPassBox.IsVisible = useKey;
         }
 

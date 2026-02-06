@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private bool _dropTargetAfter;
     private int? _dropTargetIndex;
     private ListBox? _dropTargetList;
+    private ListBox? _appendDropTargetList;
     private Border? _folderDropTarget;
 
     public MainWindow()
@@ -152,13 +153,22 @@ public partial class MainWindow : Window
     private void OnServerListDragOver(object? sender,
         DragEventArgs e)
     {
-        if (e.DataTransfer is not null && e.DataTransfer.Items.Any(item => item.Formats.Contains(ServerIdFormat)))
-            e.DragEffects = DragDropEffects.Move;
-        else
+        var hasServerDrag =
+            e.DataTransfer is not null &&
+            e.DataTransfer.Items.Any(item => item.Formats.Contains(ServerIdFormat));
+
+        if (!hasServerDrag)
+        {
             e.DragEffects = DragDropEffects.None;
+            ClearDropIndicator();
+            return;
+        }
+
+        e.DragEffects = DragDropEffects.Move;
 
         if (sender is not ListBox listBox) return;
         UpdateDropIndicator(listBox, e);
+        e.Handled = true;
     }
 
     private async void OnServerListDrop(object? sender,
@@ -184,17 +194,17 @@ public partial class MainWindow : Window
 
         if (ReferenceEquals(src.List, targetList))
         {
-            if (src.Index == targetIndex)
-            {
-                ClearDropIndicator();
-                return;
-            }
-
             if (src.Index < targetIndex)
                 targetIndex--;
 
             if (targetIndex < 0) targetIndex = 0;
             if (targetIndex >= targetList.Count) targetIndex = targetList.Count - 1;
+
+            if (src.Index == targetIndex)
+            {
+                ClearDropIndicator();
+                return;
+            }
 
             targetList.Move(src.Index, targetIndex);
         }
@@ -207,6 +217,7 @@ public partial class MainWindow : Window
         }
 
         await vm.SaveLibraryAsync();
+        e.Handled = true;
         ClearDropIndicator();
     }
 
@@ -270,18 +281,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (list.Count > 0)
-        {
-            var lastItem = GetItemAtPoint(listBox, new Point(0, listBox.Bounds.Height - 1));
-            if (lastItem is not null)
-            {
-                SetDropIndicator(listBox, lastItem, true);
-                _dropTargetIndex = list.Count;
-                return;
-            }
-        }
-
-        ClearDropIndicator();
+        SetAppendDropIndicator(listBox, list.Count);
     }
 
     private void SetDropIndicator(ListBox listBox,
@@ -301,6 +301,19 @@ public partial class MainWindow : Window
             item.Classes.Add("DropBefore");
     }
 
+    private void SetAppendDropIndicator(ListBox listBox,
+        int index)
+    {
+        if (_appendDropTargetList == listBox && _dropTargetIndex == index && _dropTargetItem is null)
+            return;
+
+        ClearDropIndicator();
+        _appendDropTargetList = listBox;
+        _dropTargetList = listBox;
+        _dropTargetIndex = index;
+        listBox.Classes.Add("DropAppend");
+    }
+
     private void ClearDropIndicator()
     {
         if (_dropTargetItem is not null)
@@ -309,23 +322,35 @@ public partial class MainWindow : Window
             _dropTargetItem.Classes.Remove("DropBefore");
         }
 
+        if (_appendDropTargetList is not null)
+            _appendDropTargetList.Classes.Remove("DropAppend");
+
         _dropTargetItem = null;
         _dropTargetAfter = false;
         _dropTargetIndex = null;
         _dropTargetList = null;
+        _appendDropTargetList = null;
         ClearFolderDropIndicator();
     }
 
     private void OnFolderHeaderDragOver(object? sender,
         DragEventArgs e)
     {
-        if (e.DataTransfer is not null && e.DataTransfer.Items.Any(item => item.Formats.Contains(ServerIdFormat)))
+        var hasServerDrag =
+            e.DataTransfer is not null &&
+            e.DataTransfer.Items.Any(item => item.Formats.Contains(ServerIdFormat));
+
+        if (hasServerDrag)
             e.DragEffects = DragDropEffects.Move;
         else
             e.DragEffects = DragDropEffects.None;
 
-        if (sender is Border border)
+        if (hasServerDrag && sender is Border border)
             SetFolderDropIndicator(border);
+        else
+            ClearFolderDropIndicator();
+
+        e.Handled = true;
     }
 
     private async void OnFolderHeaderDrop(object? sender,
@@ -348,12 +373,60 @@ public partial class MainWindow : Window
             await vm.SaveLibraryAsync();
         }
 
+        e.Handled = true;
         ClearFolderDropIndicator();
     }
 
     private void OnFolderHeaderDragLeave(object? sender,
         DragEventArgs e)
     {
+        ClearFolderDropIndicator();
+    }
+
+    private void OnEmptyFolderDragOver(object? sender,
+        DragEventArgs e)
+    {
+        var hasServerDrag =
+            e.DataTransfer is not null &&
+            e.DataTransfer.Items.Any(item => item.Formats.Contains(ServerIdFormat));
+
+        e.DragEffects = hasServerDrag ? DragDropEffects.Move : DragDropEffects.None;
+
+        if (hasServerDrag && sender is Border border)
+            SetFolderDropIndicator(border);
+        else
+            ClearFolderDropIndicator();
+
+        e.Handled = true;
+    }
+
+    private void OnEmptyFolderDragLeave(object? sender,
+        DragEventArgs e)
+    {
+        ClearFolderDropIndicator();
+    }
+
+    private async void OnEmptyFolderDrop(object? sender,
+        DragEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        if (sender is not Border border) return;
+        if (border.Tag is not ServerFolder folder) return;
+
+        var serverId = TryGetDraggedServerId(e.DataTransfer);
+        if (serverId is null) return;
+
+        var source = FindServerLocation(vm, serverId);
+        if (source is not { } src) return;
+
+        if (!ReferenceEquals(src.List, folder.Servers))
+        {
+            src.List.RemoveAt(src.Index);
+            folder.Servers.Add(src.Profile);
+            await vm.SaveLibraryAsync();
+        }
+
+        e.Handled = true;
         ClearFolderDropIndicator();
     }
 

@@ -1,6 +1,10 @@
+using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using NoBSSftp.Models;
@@ -32,6 +36,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         TabItems.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasTabs));
         TabItems.Add(_addTabItem);
+        AddTab();
 
         // Load servers
         Task.Run(async () =>
@@ -49,6 +54,8 @@ public partial class MainWindowViewModel : ViewModelBase
                         Servers = new ObservableCollection<ServerProfile>(folder.Servers)
                     });
                 }
+
+                RefreshSessionSuggestions();
             });
         });
     }
@@ -69,6 +76,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             RootServers.Add(newProfile);
             await SaveLibraryAsync();
+            RefreshSessionSuggestions();
         }
     }
 
@@ -86,6 +94,7 @@ public partial class MainWindowViewModel : ViewModelBase
             if (index >= 0)
                 list[index] = updatedProfile;
             await SaveLibraryAsync();
+            RefreshSessionSuggestions();
         }
     }
 
@@ -99,6 +108,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             list.Remove(profile);
             await SaveLibraryAsync();
+            RefreshSessionSuggestions();
         }
     }
 
@@ -124,8 +134,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 PrivateKeyPassphrase = credentials.PrivateKeyPassphrase
             };
 
-        var newTab = new SessionViewModel(sessionProfile);
-        newTab.CloseRequested += OnTabCloseRequested;
+        var newTab = CreateSessionTab(sessionProfile);
 
         InsertBeforeAddTab(newTab);
 
@@ -137,8 +146,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void AddTab()
     {
-        var newTab = new SessionViewModel();
-        newTab.CloseRequested += OnTabCloseRequested;
+        var newTab = CreateSessionTab();
 
         InsertBeforeAddTab(newTab);
 
@@ -154,11 +162,47 @@ public partial class MainWindowViewModel : ViewModelBase
     private void CloseTab(SessionViewModel tab)
     {
         if (!TabItems.Contains(tab)) return;
+        var closingIndex = TabItems.IndexOf(tab);
+        var wasSelected = ReferenceEquals(SelectedTabItem, tab);
+
         tab.CloseRequested -= OnTabCloseRequested;
         tab.DisconnectCommand.Execute(null);
         TabItems.Remove(tab);
-        if (SelectedTabItem == tab)
-            SelectedTabItem = TabItems.OfType<SessionViewModel>().LastOrDefault();
+
+        if (!TabItems.OfType<SessionViewModel>().Any())
+        {
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+                desktop.Shutdown();
+            return;
+        }
+
+        if (!wasSelected && SelectedTabItem is SessionViewModel)
+            return;
+
+        SessionViewModel? replacement = null;
+
+        for (var i = closingIndex; i < TabItems.Count; i++)
+        {
+            if (TabItems[i] is SessionViewModel nextSession)
+            {
+                replacement = nextSession;
+                break;
+            }
+        }
+
+        if (replacement is null)
+        {
+            for (var i = closingIndex - 1; i >= 0; i--)
+            {
+                if (TabItems[i] is SessionViewModel prevSession)
+                {
+                    replacement = prevSession;
+                    break;
+                }
+            }
+        }
+
+        SelectedTabItem = replacement ?? TabItems.OfType<SessionViewModel>().LastOrDefault();
     }
 
     public Task SaveServerOrderAsync()
@@ -200,6 +244,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         Folders.Remove(folder);
         await SaveLibraryAsync();
+        RefreshSessionSuggestions();
     }
 
     public Task SaveLibraryAsync()
@@ -229,6 +274,55 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         return null;
+    }
+
+    private SessionViewModel CreateSessionTab(ServerProfile? profile = null)
+    {
+        var tab = profile is null
+            ? new SessionViewModel()
+            : new SessionViewModel(profile);
+
+        tab.CloseRequested += OnTabCloseRequested;
+        tab.SetConnectionSuggestions(BuildConnectionSuggestions());
+        return tab;
+    }
+
+    private IReadOnlyList<ServerProfile> BuildConnectionSuggestions()
+    {
+        var suggestions = new List<ServerProfile>();
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+
+        static void AddUnique(List<ServerProfile> target,
+            HashSet<string> seen,
+            ServerProfile server)
+        {
+            if (string.IsNullOrWhiteSpace(server.Id))
+            {
+                target.Add(server);
+                return;
+            }
+
+            if (seen.Add(server.Id))
+                target.Add(server);
+        }
+
+        foreach (var server in RootServers)
+            AddUnique(suggestions, seenIds, server);
+
+        foreach (var folder in Folders)
+        {
+            foreach (var server in folder.Servers)
+                AddUnique(suggestions, seenIds, server);
+        }
+
+        return suggestions;
+    }
+
+    private void RefreshSessionSuggestions()
+    {
+        var suggestions = BuildConnectionSuggestions();
+        foreach (var tab in TabItems.OfType<SessionViewModel>())
+            tab.SetConnectionSuggestions(suggestions);
     }
 
     partial void OnSelectedTabItemChanged(object? value)

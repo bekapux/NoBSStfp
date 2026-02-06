@@ -17,6 +17,8 @@ public partial class SessionViewModel : ViewModelBase
     private readonly ISftpService _sftpService;
     private readonly IDialogService _dialogService;
     private CancellationTokenSource? _transferCts;
+    private DateTime _lastExternalTerminalLaunchUtc = DateTime.MinValue;
+    private DateTime _lastSuggestionConnectUtc = DateTime.MinValue;
 
     [ObservableProperty]
     private string _header = "New Server";
@@ -28,6 +30,7 @@ public partial class SessionViewModel : ViewModelBase
     private string _currentPath = "/";
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(OpenExternalTerminalCommand))]
     private bool _isConnected;
 
     [ObservableProperty]
@@ -52,10 +55,7 @@ public partial class SessionViewModel : ViewModelBase
     private bool _showHiddenFiles;
 
     [ObservableProperty]
-    private bool _isTerminalVisible = true;
-
-    [ObservableProperty]
-    private TerminalViewModel _terminal;
+    private int _connectFailureFocusRequestId;
 
     private class ClipboardItem
     {
@@ -77,6 +77,20 @@ public partial class SessionViewModel : ViewModelBase
     public event Action<SessionViewModel>? CloseRequested;
 
     public ObservableCollection<FileEntry> Files { get; } = [];
+
+    [ObservableProperty]
+    private ServerProfile? _suggestedServerPrimary;
+
+    [ObservableProperty]
+    private ServerProfile? _suggestedServerSecondary;
+
+    public bool HasSuggestedServerPrimary => SuggestedServerPrimary is not null;
+    public bool HasSuggestedServerSecondary => SuggestedServerSecondary is not null;
+    public bool HasSingleSuggestedServer =>
+        SuggestedServerPrimary is not null && SuggestedServerSecondary is null;
+    public bool HasTwoSuggestedServers =>
+        SuggestedServerPrimary is not null && SuggestedServerSecondary is not null;
+
     private List<FileEntry> _allFiles = [];
 
     public SessionViewModel() : this(new ServerProfile())
@@ -88,14 +102,92 @@ public partial class SessionViewModel : ViewModelBase
         _sftpService = new SftpService();
         _dialogService = new DialogService();
         _profile = profile;
-        _terminal = new TerminalViewModel(_sftpService);
         Header = GetDisplayName();
     }
 
-    [RelayCommand]
-    private void ToggleTerminal()
+    public void SetConnectionSuggestions(IEnumerable<ServerProfile> suggestions)
     {
-        IsTerminalVisible = !IsTerminalVisible;
+        var topSuggestions = suggestions
+            .Where(s => s is not null)
+            .Take(2)
+            .ToArray();
+
+        SuggestedServerPrimary = topSuggestions.Length > 0
+            ? topSuggestions[0]
+            : null;
+
+        SuggestedServerSecondary = topSuggestions.Length > 1
+            ? topSuggestions[1]
+            : null;
+    }
+
+    [RelayCommand]
+    private async Task ConnectSuggestion(ServerProfile? suggestion)
+    {
+        if (suggestion is null) return;
+
+        var now = DateTime.UtcNow;
+        if (now - _lastSuggestionConnectUtc < TimeSpan.FromMilliseconds(600))
+            return;
+
+        _lastSuggestionConnectUtc = now;
+
+        var credentials = await _dialogService.ShowConnectDialogAsync("Connect", suggestion.Host, suggestion);
+        if (credentials is null)
+            return;
+
+        ApplyConnectionSuggestion(suggestion, credentials);
+        await Connect();
+    }
+
+    private void ApplyConnectionSuggestion(ServerProfile suggestion, ConnectInfo credentials)
+    {
+        Profile.Name = suggestion.Name;
+        Profile.Host = suggestion.Host;
+        Profile.Port = suggestion.Port;
+        Profile.Username = credentials.Username;
+        Profile.Password = credentials.Password;
+        Profile.UsePrivateKey = credentials.UsePrivateKey;
+        Profile.PrivateKeyPath = credentials.PrivateKeyPath;
+        Profile.PrivateKeyPassphrase = credentials.PrivateKeyPassphrase;
+
+        OnPropertyChanged(nameof(Profile));
+        Header = GetDisplayName();
+    }
+
+    partial void OnSuggestedServerPrimaryChanged(ServerProfile? value)
+    {
+        OnPropertyChanged(nameof(HasSuggestedServerPrimary));
+        OnPropertyChanged(nameof(HasSingleSuggestedServer));
+        OnPropertyChanged(nameof(HasTwoSuggestedServers));
+    }
+
+    partial void OnSuggestedServerSecondaryChanged(ServerProfile? value)
+    {
+        OnPropertyChanged(nameof(HasSuggestedServerSecondary));
+        OnPropertyChanged(nameof(HasSingleSuggestedServer));
+        OnPropertyChanged(nameof(HasTwoSuggestedServers));
+    }
+
+    [RelayCommand(CanExecute = nameof(IsConnected))]
+    private void OpenExternalTerminal()
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastExternalTerminalLaunchUtc < TimeSpan.FromMilliseconds(800))
+            return;
+
+        _lastExternalTerminalLaunchUtc = now;
+
+        try
+        {
+            ExternalTerminalService.OpenSshSession(Profile);
+            StatusMessage = "Opened terminal session";
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Error("Open external terminal failed", ex);
+            StatusMessage = $"Terminal Error: {ex.Message}";
+        }
     }
 
     [RelayCommand]
@@ -107,27 +199,38 @@ public partial class SessionViewModel : ViewModelBase
     [RelayCommand]
     public async Task Connect()
     {
+        var attemptedHost = Profile.Host;
+        var attemptedUsername = Profile.Username;
+
         try
         {
             StatusMessage = "Connecting...";
             await _sftpService.ConnectAsync(Profile);
+
+            var startPath = "/";
+            try
+            {
+                startPath = NormalizeRemotePath(await _sftpService.GetCurrentDirectoryAsync());
+            }
+            catch (Exception ex)
+            {
+                LoggingService.Warn($"Could not determine remote home directory; falling back to '/'. {ex.Message}");
+            }
+
+            CurrentPath = startPath;
             IsConnected = true;
             Header = GetDisplayName(preferHostWhenDefaultName: true);
             StatusMessage = "Connected";
             await RefreshFileList();
-            try
-            {
-                await Terminal.ConnectAsync(Profile);
-            }
-            catch (Exception ex)
-            {
-                LoggingService.Error("Terminal connect failed", ex);
-                StatusMessage = $"Terminal Error: {ex.Message}";
-            }
         }
         catch (Exception ex)
         {
             LoggingService.Error("Connect failed", ex);
+            IsConnected = false;
+            Profile.Host = attemptedHost;
+            Profile.Username = attemptedUsername;
+            OnPropertyChanged(nameof(Profile));
+            ConnectFailureFocusRequestId++;
             StatusMessage = $"Error: {ex.Message}";
         }
     }
@@ -144,10 +247,17 @@ public partial class SessionViewModel : ViewModelBase
         return string.IsNullOrWhiteSpace(name) ? "New Server" : name;
     }
 
+    private static string NormalizeRemotePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "/";
+
+        return path.Trim();
+    }
+
     [RelayCommand]
     private async Task Disconnect()
     {
-        await Terminal.DisconnectAsync();
         await _sftpService.DisconnectAsync();
         IsConnected = false;
         Files.Clear();

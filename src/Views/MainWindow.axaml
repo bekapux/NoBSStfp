@@ -20,65 +20,168 @@
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Cursor" Value="Hand"/>
         </Style>
+        <Style Selector="Button.SidebarToggle">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="CornerRadius" Value="0"/>
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="MinWidth" Value="22"/>
+            <Setter Property="MinHeight" Value="22"/>
+        </Style>
         <Style Selector="Button.Flat:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="#FFBDBD"/> <!-- Light Red -->
         </Style>
         <Style Selector="Button.Flat:pointerover icon|MaterialIcon">
             <Setter Property="Foreground" Value="#D50000"/> <!-- Darker Red Icon -->
         </Style>
-        
+        <Style Selector="ListBox.TabStripList">
+            <Setter Property="Background" Value="#141414"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+        </Style>
+        <Style Selector="ListBox.TabStripList > ListBoxItem">
+            <Setter Property="Margin" Value="1,0,0,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+        </Style>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:selected">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:pointerover">
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
         <Style Selector="Border.TabHeader">
-            <Setter Property="Background" Value="#2B2B2B"/>
-            <Setter Property="BorderBrush" Value="#1E1E1E"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="6"/>
-            <Setter Property="Padding" Value="5 2"/>
-            <Setter Property="Margin" Value="0 0 4 0"/>
-            <Setter Property="MinHeight" Value="22"/>
+            <Setter Property="Background" Value="#111111"/>
+            <Setter Property="BorderBrush" Value="#1F1F1F"/>
+            <Setter Property="BorderThickness" Value="1,0,1,0"/>
+            <Setter Property="CornerRadius" Value="0"/>
+            <Setter Property="Padding" Value="10 0 8 0"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="MinWidth" Value="120"/>
+            <Setter Property="MaxWidth" Value="220"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
         </Style>
-        <Style Selector="TabItem:selected Border.TabHeader">
-            <Setter Property="Background" Value="#2B2B2B"/>
-            <Setter Property="BorderBrush" Value="#1E1E1E"/>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:pointerover Border.TabHeader">
+            <Setter Property="Background" Value="#181818"/>
         </Style>
-        <Style Selector="Border.TabHeader:pointerover">
-            <Setter Property="Background" Value="#3A3A3A"/>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:selected Border.TabHeader">
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="BorderBrush" Value="#1E1E1E"/>
         </Style>
         <Style Selector="TextBlock.TabHeaderText">
-            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="#C8C8C8"/>
             <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:selected TextBlock.TabHeaderText">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+        </Style>
+        <Style Selector="Border.TabActiveIndicator">
+            <Setter Property="Height" Value="0"/>
+            <Setter Property="CornerRadius" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Opacity" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+        </Style>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:selected Border.TabActiveIndicator">
+            <Setter Property="Opacity" Value="0"/>
         </Style>
         <Style Selector="Button.TabClose">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="2"/>
-            <Setter Property="MinHeight" Value="16"/>
-            <Setter Property="MinWidth" Value="16"/>
+            <Setter Property="CornerRadius" Value="0"/>
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="MinHeight" Value="18"/>
+            <Setter Property="Width" Value="18"/>
+            <Setter Property="MinWidth" Value="18"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Opacity" Value="0"/>
+        </Style>
+        <Style Selector="Button.TabClose icon|MaterialIcon">
+            <Setter Property="Foreground" Value="#B8B8B8"/>
+        </Style>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:selected Button.TabClose">
+            <Setter Property="Opacity" Value="0.75"/>
+        </Style>
+        <Style Selector="ListBox.TabStripList > ListBoxItem:pointerover Button.TabClose">
+            <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <Style Selector="Button.TabClose:pointerover">
+            <Setter Property="Background" Value="#3E3E42"/>
+        </Style>
+        <Style Selector="Button.TabClose:pointerover icon|MaterialIcon">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
         </Style>
         <Style Selector="Button.AddTab">
-            <Setter Property="Background" Value="#F3F3F3"/>
-            <Setter Property="BorderBrush" Value="#D2D2D2"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="6"/>
-            <Setter Property="Padding" Value="8 4"/>
-            <Setter Property="Margin" Value="0 0 6 0"/>
+            <Setter Property="Background" Value="#111111"/>
+            <Setter Property="BorderBrush" Value="#1F1F1F"/>
+            <Setter Property="BorderThickness" Value="1,0,1,0"/>
+            <Setter Property="CornerRadius" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Width" Value="34"/>
+            <Setter Property="MinWidth" Value="34"/>
+            <Setter Property="MaxWidth" Value="34"/>
+            <Setter Property="Margin" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
         </Style>
         <Style Selector="Button.AddTab:pointerover">
-            <Setter Property="Background" Value="#EDEDED"/>
+            <Setter Property="Background" Value="#181818"/>
+        </Style>
+        <Style Selector="Button.AddTab:pressed">
+            <Setter Property="Background" Value="#1E1E1E"/>
+        </Style>
+        <Style Selector="Button.AddTab icon|MaterialIcon">
+            <Setter Property="Foreground" Value="#C8C8C8"/>
         </Style>
         <Style Selector="ListBox.ServerList > ListBoxItem">
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
             <Setter Property="Padding" Value="4 1"/>
+            <Setter Property="CornerRadius" Value="0"/>
+        </Style>
+        <Style Selector="ListBox.ServerList > ListBoxItem:selected">
+            <Setter Property="CornerRadius" Value="0"/>
+        </Style>
+        <Style Selector="ListBox.ServerList > ListBoxItem:pointerover">
+            <Setter Property="CornerRadius" Value="0"/>
         </Style>
         <Style Selector="ListBoxItem.DropBefore">
             <Setter Property="BorderBrush" Value="#4AA3FF"/>
             <Setter Property="BorderThickness" Value="0,2,0,0"/>
+            <Setter Property="Background" Value="#1E4AA3FF"/>
         </Style>
         <Style Selector="ListBoxItem.DropAfter">
             <Setter Property="BorderBrush" Value="#4AA3FF"/>
             <Setter Property="BorderThickness" Value="0,0,0,2"/>
+            <Setter Property="Background" Value="#1E4AA3FF"/>
+        </Style>
+        <Style Selector="ListBox.ServerList.DropAppend">
+            <Setter Property="BorderBrush" Value="#4AA3FF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="#144AA3FF"/>
+            <Setter Property="CornerRadius" Value="0"/>
         </Style>
         <Style Selector="Border.FolderDropTarget">
             <Setter Property="BorderBrush" Value="#4AA3FF"/>
-            <Setter Property="BorderThickness" Value="0,0,0,2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="#144AA3FF"/>
+            <Setter Property="CornerRadius" Value="0"/>
         </Style>
         <Style Selector="Border.FolderHeader">
             <Setter Property="Padding" Value="2 0"/>
@@ -86,10 +189,25 @@
         <Style Selector="Expander.FolderGroup /template/ ToggleButton#PART_toggle">
             <Setter Property="MinHeight" Value="24"/>
             <Setter Property="Padding" Value="4 0"/>
+            <Setter Property="CornerRadius" Value="0"/>
+        </Style>
+        <Style Selector="Expander.FolderGroup /template/ ToggleButton#PART_toggle /template/ Border">
+            <Setter Property="CornerRadius" Value="0"/>
+        </Style>
+        <Style Selector="Expander.FolderGroup /template/ ToggleButton#PART_toggle:pointerover /template/ Border">
+            <Setter Property="CornerRadius" Value="0"/>
+        </Style>
+        <Style Selector="Expander.FolderGroup /template/ ToggleButton#PART_toggle:pressed /template/ Border">
+            <Setter Property="CornerRadius" Value="0"/>
+        </Style>
+        <Style Selector="Expander.FolderGroup /template/ Border">
+            <Setter Property="CornerRadius" Value="0"/>
         </Style>
         <Style Selector="Expander.FolderGroup">
             <Setter Property="Padding" Value="0"/>
             <Setter Property="MinHeight" Value="24"/>
+            <Setter Property="ClipToBounds" Value="True"/>
+            <Setter Property="Margin" Value="0,0,0,2"/>
         </Style>
         <Style Selector="Expander.FolderGroup /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Padding" Value="0"/>
@@ -97,6 +215,9 @@
         <Style Selector="ListBox.FolderList">
             <Setter Property="Padding" Value="0"/>
             <Setter Property="Margin" Value="0"/>
+        </Style>
+        <Style Selector="ListBox.FolderList > ListBoxItem">
+            <Setter Property="Padding" Value="4,3,4,1"/>
         </Style>
     </Window.Styles>
 
@@ -107,13 +228,13 @@
     <Grid RowDefinitions="Auto, *">
       
       <SplitView Grid.Row="1" DisplayMode="CompactInline" IsPaneOpen="{Binding IsSidebarOpen}"
-                 OpenPaneLength="250" CompactPaneLength="50">
+                 OpenPaneLength="250" CompactPaneLength="24">
         <SplitView.Pane>
             <Grid RowDefinitions="Auto, *">
                 <!-- Sidebar Header -->
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="5" Margin="5">
-                    <Button Command="{Binding ToggleSidebarCommand}" Width="40" Classes="Flat">
-                        <icon:MaterialIcon Kind="Menu" />
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="0" Margin="1">
+                    <Button Command="{Binding ToggleSidebarCommand}" Classes="Flat SidebarToggle">
+                        <icon:MaterialIcon Kind="Menu" Width="16" Height="16" />
                     </Button>
                     <Button Command="{Binding AddServerCommand}" Width="40" ToolTip.Tip="Add Server"
                             IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat">
@@ -128,7 +249,9 @@
                 </StackPanel>
                 
                 <!-- Server List -->
-                <StackPanel Grid.Row="1" Spacing="2">
+                <StackPanel Grid.Row="1"
+                            Spacing="2"
+                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}">
                      <ListBox x:Name="RootServerList"
                               ItemsSource="{Binding RootServers}"
                               Background="Transparent"
@@ -187,44 +310,69 @@
                                                               CommandParameter="{Binding}"/>
                                                 </ContextMenu>
                                             </Border.ContextMenu>
-                                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                                <icon:MaterialIcon Kind="Folder" Width="20" Height="20" />
-                                                <TextBlock Text="{Binding Name}" FontWeight="Bold"/>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Spacing="6"
+                                                        VerticalAlignment="Center">
+                                                <icon:MaterialIcon Kind="Folder"
+                                                                   Width="20"
+                                                                   Height="20"
+                                                                   VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Name}"
+                                                           FontWeight="Bold"
+                                                           VerticalAlignment="Center"/>
                                             </StackPanel>
                                         </Border>
                                     </Expander.Header>
-                                    <ListBox ItemsSource="{Binding Servers}"
-                                             Background="Transparent"
-                                             MinHeight="24"
-                                             Classes="ServerList FolderList"
-                                             Tag="{Binding}"
-                                             DragDrop.AllowDrop="True"
-                                             DragDrop.DragOver="OnServerListDragOver"
-                                             DragDrop.DragLeave="OnServerListDragLeave"
-                                             DragDrop.Drop="OnServerListDrop"
-                                             DoubleTapped="OnServerListDoubleTapped">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent">
-                                                    <StackPanel.ContextMenu>
-                                                        <ContextMenu>
-                                                            <MenuItem Header="Edit" 
-                                                                      Command="{Binding #Root.DataContext.EditServerCommand}"
-                                                                      CommandParameter="{Binding}"/>
-                                                            <MenuItem Header="Delete" 
-                                                                      Command="{Binding #Root.DataContext.DeleteServerCommand}"
-                                                                      CommandParameter="{Binding}"/>
-                                                        </ContextMenu>
-                                                    </StackPanel.ContextMenu>
-                                                    <icon:MaterialIcon Kind="ServerNetwork" Width="20" Height="20" />
-                                                    <StackPanel IsVisible="{Binding #Root.DataContext.IsSidebarOpen}">
-                                                        <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="12"/>
-                                                        <TextBlock Text="{Binding Host}" FontSize="10" Foreground="Gray"/>
+                                    <Grid RowDefinitions="Auto">
+                                        <ListBox ItemsSource="{Binding Servers}"
+                                                 Background="Transparent"
+                                                 MinHeight="24"
+                                                 IsVisible="{Binding HasServers}"
+                                                 Classes="ServerList FolderList"
+                                                 Tag="{Binding}"
+                                                 DragDrop.AllowDrop="True"
+                                                 DragDrop.DragOver="OnServerListDragOver"
+                                                 DragDrop.DragLeave="OnServerListDragLeave"
+                                                 DragDrop.Drop="OnServerListDrop"
+                                                 DoubleTapped="OnServerListDoubleTapped">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent">
+                                                        <StackPanel.ContextMenu>
+                                                            <ContextMenu>
+                                                                <MenuItem Header="Edit" 
+                                                                          Command="{Binding #Root.DataContext.EditServerCommand}"
+                                                                          CommandParameter="{Binding}"/>
+                                                                <MenuItem Header="Delete" 
+                                                                          Command="{Binding #Root.DataContext.DeleteServerCommand}"
+                                                                          CommandParameter="{Binding}"/>
+                                                            </ContextMenu>
+                                                        </StackPanel.ContextMenu>
+                                                        <icon:MaterialIcon Kind="ServerNetwork" Width="20" Height="20" />
+                                                        <StackPanel IsVisible="{Binding #Root.DataContext.IsSidebarOpen}">
+                                                            <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="12"/>
+                                                            <TextBlock Text="{Binding Host}" FontSize="10" Foreground="Gray"/>
+                                                        </StackPanel>
                                                     </StackPanel>
-                                                </StackPanel>
-                                            </DataTemplate>
-                                        </ListBox.ItemTemplate>
-                                    </ListBox>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+
+                                        <Border IsVisible="{Binding !HasServers}"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Margin="8,4,8,8"
+                                                Padding="2"
+                                                DragDrop.AllowDrop="True"
+                                                Tag="{Binding}"
+                                                DragDrop.DragOver="OnEmptyFolderDragOver"
+                                                DragDrop.DragLeave="OnEmptyFolderDragLeave"
+                                                DragDrop.Drop="OnEmptyFolderDrop">
+                                            <TextBlock Text="empty.."
+                                                       FontSize="10"
+                                                       Foreground="#8A929B"/>
+                                        </Border>
+                                    </Grid>
                                 </Expander>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -234,59 +382,77 @@
         </SplitView.Pane>
 
         <SplitView.Content>
-            <Grid>
-                  <!-- Tabs -->
-                  <TabControl ItemsSource="{Binding TabItems}"
-                              SelectedItem="{Binding SelectedTabItem}">
-                    <TabControl.ItemTemplate>
-                      <DataTemplate>
-                        <ContentControl Content="{Binding}">
-                            <ContentControl.DataTemplates>
-                                <DataTemplate DataType="vm:SessionViewModel">
-                                    <Border Classes="TabHeader">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                          <TextBlock Classes="TabHeaderText"
-                                                     Text="{Binding Header}"
-                                                     VerticalAlignment="Center"/>
-                                          <Button Command="{Binding #Root.DataContext.CloseTabCommand}"
-                                                  CommandParameter="{Binding}"
-                                                  Classes="Flat TabClose"
+            <Grid RowDefinitions="Auto,*">
+                <ListBox Grid.Row="0"
+                         Classes="TabStripList"
+                         ItemsSource="{Binding TabItems}"
+                         SelectedItem="{Binding SelectedTabItem}"
+                         Background="#141414"
+                         BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="0"/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <ContentControl Content="{Binding}">
+                                <ContentControl.DataTemplates>
+                                    <DataTemplate DataType="vm:SessionViewModel">
+                                        <Border Classes="TabHeader">
+                                            <Grid ColumnDefinitions="Auto,*,Auto"
+                                                  ColumnSpacing="6"
                                                   VerticalAlignment="Center"
-                                                  ToolTip.Tip="Close Tab">
-                                              <icon:MaterialIcon Kind="Close" Width="16" Height="16"
-                                                                 Foreground="White"/>
-                                          </Button>
-                                        </StackPanel>
-                                    </Border>
-                                </DataTemplate>
-                                <DataTemplate DataType="vm:AddTabViewModel">
-                                    <Button Classes="AddTab"
-                                            Command="{Binding #Root.DataContext.AddTabCommand}"
-                                            ToolTip.Tip="New Server">
-                                        <icon:MaterialIcon Kind="Plus" Width="18" Height="18"
-                                                           Foreground="#333333"/>
-                                    </Button>
-                                </DataTemplate>
-                            </ContentControl.DataTemplates>
-                        </ContentControl>
-                      </DataTemplate>
-                    </TabControl.ItemTemplate>
-                    
-                    <TabControl.ContentTemplate>
-                      <DataTemplate>
-                         <ContentControl Content="{Binding}">
-                             <ContentControl.DataTemplates>
-                                 <DataTemplate DataType="vm:SessionViewModel">
-                                    <views:FileBrowserView/>
-                                 </DataTemplate>
-                                 <DataTemplate DataType="vm:AddTabViewModel">
-                                    <Panel/>
-                                 </DataTemplate>
-                             </ContentControl.DataTemplates>
-                         </ContentControl>
-                      </DataTemplate>
-                    </TabControl.ContentTemplate>
-                  </TabControl>
+                                                  HorizontalAlignment="Stretch">
+                                                <icon:MaterialIcon Kind="ServerNetwork"
+                                                                   Grid.Column="0"
+                                                                   Width="13"
+                                                                   Height="13"
+                                                                   Foreground="#8D9DB1"
+                                                                   VerticalAlignment="Center"/>
+                                                <TextBlock Classes="TabHeaderText"
+                                                           Grid.Column="1"
+                                                           Text="{Binding Header}"
+                                                           VerticalAlignment="Center"
+                                                           TextWrapping="NoWrap"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <Button Command="{Binding #Root.DataContext.CloseTabCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        Classes="TabClose"
+                                                        Grid.Column="2"
+                                                        HorizontalAlignment="Right"
+                                                        VerticalAlignment="Center"
+                                                        ToolTip.Tip="Close Tab">
+                                                    <icon:MaterialIcon Kind="Close" Width="12" Height="12"/>
+                                                </Button>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                    <DataTemplate DataType="vm:AddTabViewModel">
+                                        <Button Classes="AddTab"
+                                                Command="{Binding #Root.DataContext.AddTabCommand}"
+                                                ToolTip.Tip="New Server">
+                                            <icon:MaterialIcon Kind="Plus" Width="16" Height="16"/>
+                                        </Button>
+                                    </DataTemplate>
+                                </ContentControl.DataTemplates>
+                            </ContentControl>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <ContentControl Grid.Row="1" Content="{Binding SelectedTabItem}" Margin="0">
+                    <ContentControl.DataTemplates>
+                        <DataTemplate DataType="vm:SessionViewModel">
+                            <views:FileBrowserView Margin="0"/>
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:AddTabViewModel">
+                            <Panel/>
+                        </DataTemplate>
+                    </ContentControl.DataTemplates>
+                </ContentControl>
             </Grid>
         </SplitView.Content>
       </SplitView>

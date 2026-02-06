@@ -8,35 +8,87 @@ using NoBSSftp.ViewModels;
 using System;
 using System.Linq;
 using System.Collections.Generic;
-using System.ComponentModel;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
+using System.ComponentModel;
 
 namespace NoBSSftp.Views;
 
 public partial class FileBrowserView : UserControl
 {
-    private SessionViewModel? _viewModel;
-    private Grid? _rootGrid;
-    private GridLength _cachedFileRowHeight = new(1, GridUnitType.Star);
-    private GridLength _cachedSplitterRowHeight = GridLength.Auto;
-    private GridLength _cachedTerminalRowHeight = GridLength.Auto;
+    private SessionViewModel? _observedVm;
 
     public FileBrowserView()
     {
         InitializeComponent();
-        _rootGrid = this.FindControl<Grid>("RootGrid");
+        DataContextChanged += OnDataContextChanged;
         AddHandler(DragDrop.DragOverEvent, OnDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DragEnterEvent, OnDragEnter, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DragLeaveEvent, OnDragLeave, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DropEvent, OnDrop, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
-        DataContextChanged += OnDataContextChanged;
-        UpdateTerminalRows(true);
     }
 
     private static readonly DataFormat<string> InternalPathFormat =
         DataFormat.CreateStringApplicationFormat("NoBSSftp.InternalPath");
+
+    private void OnDataContextChanged(object? sender, EventArgs e)
+    {
+        if (ReferenceEquals(_observedVm, DataContext))
+            return;
+
+        if (_observedVm is not null)
+            _observedVm.PropertyChanged -= OnSessionViewModelPropertyChanged;
+
+        _observedVm = DataContext as SessionViewModel;
+        if (_observedVm is not null)
+            _observedVm.PropertyChanged += OnSessionViewModelPropertyChanged;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        if (_observedVm is not null)
+            _observedVm.PropertyChanged -= OnSessionViewModelPropertyChanged;
+        _observedVm = null;
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void OnSessionViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not SessionViewModel vm)
+            return;
+
+        if (e.PropertyName != nameof(SessionViewModel.ConnectFailureFocusRequestId))
+            return;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!ReferenceEquals(DataContext, vm) || vm.IsConnected)
+                return;
+
+            // On failed password auth, keep keyboard in credential input for quick retry.
+            if (!vm.Profile.UsePrivateKey && ConnectPasswordBox.IsVisible)
+            {
+                ConnectPasswordBox.Focus();
+                ConnectPasswordBox.SelectAll();
+                return;
+            }
+
+            if (ConnectKeyPassphraseBox.IsVisible)
+            {
+                ConnectKeyPassphraseBox.Focus();
+                ConnectKeyPassphraseBox.SelectAll();
+                return;
+            }
+
+            if (ConnectKeyPathBox.IsVisible)
+            {
+                ConnectKeyPathBox.Focus();
+                ConnectKeyPathBox.SelectAll();
+            }
+        }, DispatcherPriority.Input);
+    }
 
     private async void OnDataGridDoubleTapped(object? sender, TappedEventArgs e)
     {
@@ -61,15 +113,28 @@ public partial class FileBrowserView : UserControl
     private void OnDragLeave(object? sender, DragEventArgs e)
     {
         DragOverlay.IsVisible = false;
+        var position = e.GetPosition(this);
+        if (position.X < 0 || position.Y < 0 || position.X > Bounds.Width || position.Y > Bounds.Height)
+        {
+            ClearDropTargetHighlight();
+        }
     }
 
     private Point? _dragStartPoint;
     private Control? _dragSource;
+    private Control? _highlightedDropTarget;
 
     private void OnRowPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is Control control && control.DataContext is FileEntry)
+        if (sender is Control control && control.DataContext is FileEntry entry)
         {
+            if (entry.Name == "..")
+            {
+                _dragStartPoint = null;
+                _dragSource = null;
+                return;
+            }
+
             var properties = e.GetCurrentPoint(control).Properties;
             if (!properties.IsLeftButtonPressed)
             {
@@ -106,6 +171,9 @@ public partial class FileBrowserView : UserControl
 
                 if (source.DataContext is FileEntry fileEntry && DataContext is SessionViewModel vm)
                 {
+                    if (fileEntry.Name == "..")
+                        return;
+
                     var sourcePath = vm.CurrentPath.EndsWith("/")
                         ? vm.CurrentPath + fileEntry.Name
                         : $"{vm.CurrentPath}/{fileEntry.Name}";
@@ -130,26 +198,32 @@ public partial class FileBrowserView : UserControl
         if (!string.IsNullOrEmpty(sourcePath))
         {
             // Check if the target is a directory
-            if (sender is Control control && control.DataContext is FileEntry targetEntry && targetEntry.IsDirectory && targetEntry.Name != "..")
+            if (sender is Control control && control.DataContext is FileEntry targetEntry && targetEntry.IsDirectory)
             {
+                SetDropTargetHighlight(control);
                 e.DragEffects = DragDropEffects.Move;
                 e.Handled = true;
                 return;
             }
         }
-        
+
+        ClearDropTargetHighlight();
         e.DragEffects = DragDropEffects.None;
     }
 
     private async void OnRowDrop(object? sender, DragEventArgs e)
     {
+        ClearDropTargetHighlight();
+
         var sourcePath = TryGetInternalPath(e.DataTransfer);
         if (!string.IsNullOrEmpty(sourcePath) && sender is Control control && control.DataContext is FileEntry targetEntry && targetEntry.IsDirectory)
         {
             if (DataContext is SessionViewModel vm)
             {
-                // Dest path is implicit: we are moving INTO targetEntry folder.
-                var destFolderPath = vm.CurrentPath.EndsWith("/") ? vm.CurrentPath + targetEntry.Name : $"{vm.CurrentPath}/{targetEntry.Name}";
+                var destFolderPath =
+                    targetEntry.Name == ".."
+                        ? GetParentRemotePath(vm.CurrentPath)
+                        : (vm.CurrentPath.EndsWith("/") ? vm.CurrentPath + targetEntry.Name : $"{vm.CurrentPath}/{targetEntry.Name}");
                 await vm.MoveItem(sourcePath, destFolderPath);
             }
             e.Handled = true;
@@ -177,6 +251,7 @@ public partial class FileBrowserView : UserControl
     private async void OnDrop(object? sender, DragEventArgs e)
     {
         DragOverlay.IsVisible = false;
+        ClearDropTargetHighlight();
         
         if (HasExternalFiles(e.DataTransfer))
         {
@@ -311,47 +386,45 @@ public partial class FileBrowserView : UserControl
         return null;
     }
 
-    private void OnDataContextChanged(object? sender, EventArgs e)
+    private static string GetParentRemotePath(string currentPath)
     {
-        if (_viewModel is not null)
-            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        if (string.IsNullOrWhiteSpace(currentPath))
+            return "/";
 
-        _viewModel = DataContext as SessionViewModel;
-        if (_viewModel is not null)
-            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        var normalized = currentPath.Trim();
+        if (normalized == "/")
+            return "/";
 
-        UpdateTerminalRows(_viewModel?.IsTerminalVisible ?? true);
+        normalized = normalized.TrimEnd('/');
+        if (normalized.Length == 0)
+            return "/";
+
+        var separatorIndex = normalized.LastIndexOf('/');
+        if (separatorIndex <= 0)
+            return "/";
+
+        return normalized[..separatorIndex];
     }
 
-    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    private void SetDropTargetHighlight(Control control)
     {
-        if (e.PropertyName == nameof(SessionViewModel.IsTerminalVisible))
-            UpdateTerminalRows(_viewModel?.IsTerminalVisible ?? true);
-    }
+        var target = control.FindAncestorOfType<DataGridRow>() ?? control;
 
-    private void UpdateTerminalRows(bool isVisible)
-    {
-        if (_rootGrid is null || _rootGrid.RowDefinitions.Count < 5)
+        if (ReferenceEquals(_highlightedDropTarget, target))
             return;
 
-        var fileRow = _rootGrid.RowDefinitions[2];
-        var splitterRow = _rootGrid.RowDefinitions[3];
-        var terminalRow = _rootGrid.RowDefinitions[4];
-
-        if (isVisible)
-        {
-            fileRow.Height = _cachedFileRowHeight;
-            splitterRow.Height = _cachedSplitterRowHeight;
-            terminalRow.Height = _cachedTerminalRowHeight;
-            return;
-        }
-
-        _cachedFileRowHeight = fileRow.Height;
-        _cachedSplitterRowHeight = splitterRow.Height;
-        _cachedTerminalRowHeight = terminalRow.Height;
-
-        fileRow.Height = new GridLength(1, GridUnitType.Star);
-        splitterRow.Height = new GridLength(0);
-        terminalRow.Height = new GridLength(0);
+        ClearDropTargetHighlight();
+        _highlightedDropTarget = target;
+        _highlightedDropTarget.Classes.Add("DropTargetRow");
     }
+
+    private void ClearDropTargetHighlight()
+    {
+        if (_highlightedDropTarget is null)
+            return;
+
+        _highlightedDropTarget.Classes.Remove("DropTargetRow");
+        _highlightedDropTarget = null;
+    }
+
 }
