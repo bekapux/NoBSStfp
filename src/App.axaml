@@ -1,6 +1,5 @@
 <Application xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
     x:Class="NoBSSftp.App"
     Name="NoBSStfp"
     xmlns:local="using:NoBSSftp"
@@ -12,7 +11,6 @@
     <Application.Styles>
         <FluentTheme />
         <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
-        <materialIcons:MaterialIconStyles />
         <Style Selector=":is(TemplatedControl)">
             <Setter Property="FontFamily" Value="Menlo,Consolas,Courier New" />
         </Style>

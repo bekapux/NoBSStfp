@@ -4,7 +4,6 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:views="using:NoBSSftp.Views"
-        xmlns:icon="using:Material.Icons.Avalonia"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="NoBSSftp.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -29,10 +28,23 @@
             <Setter Property="MinWidth" Value="22"/>
             <Setter Property="MinHeight" Value="22"/>
         </Style>
+        <Style Selector="Button.SidebarToggle /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.14"/>
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.SidebarToggle.Active /template/ ContentPresenter">
+            <Setter Property="Background" Value="#3A3A3A"/>
+        </Style>
+        <Style Selector="Button.SidebarToggle.Active TextBlock.IconGlyph">
+            <Setter Property="Foreground" Value="#EAF4FF"/>
+        </Style>
         <Style Selector="Button.Flat:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="#FFBDBD"/> <!-- Light Red -->
         </Style>
-        <Style Selector="Button.Flat:pointerover icon|MaterialIcon">
+        <Style Selector="Button.Flat:pointerover TextBlock.IconGlyph">
             <Setter Property="Foreground" Value="#D50000"/> <!-- Darker Red Icon -->
         </Style>
         <Style Selector="ListBox.TabStripList">
@@ -111,7 +123,7 @@
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Opacity" Value="0"/>
         </Style>
-        <Style Selector="Button.TabClose icon|MaterialIcon">
+        <Style Selector="Button.TabClose TextBlock.IconGlyph">
             <Setter Property="Foreground" Value="#B8B8B8"/>
         </Style>
         <Style Selector="ListBox.TabStripList > ListBoxItem:selected Button.TabClose">
@@ -123,7 +135,7 @@
         <Style Selector="Button.TabClose:pointerover">
             <Setter Property="Background" Value="#3E3E42"/>
         </Style>
-        <Style Selector="Button.TabClose:pointerover icon|MaterialIcon">
+        <Style Selector="Button.TabClose:pointerover TextBlock.IconGlyph">
             <Setter Property="Foreground" Value="#FFFFFF"/>
         </Style>
         <Style Selector="Button.AddTab">
@@ -147,7 +159,7 @@
         <Style Selector="Button.AddTab:pressed">
             <Setter Property="Background" Value="#1E1E1E"/>
         </Style>
-        <Style Selector="Button.AddTab icon|MaterialIcon">
+        <Style Selector="Button.AddTab TextBlock.IconGlyph">
             <Setter Property="Foreground" Value="#C8C8C8"/>
         </Style>
         <Style Selector="ListBox.ServerList > ListBoxItem">
@@ -232,17 +244,18 @@
         <SplitView.Pane>
             <Grid RowDefinitions="Auto,*,Auto">
                 <!-- Sidebar Header -->
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="0" Margin="1">
-                    <Button Command="{Binding ToggleSidebarCommand}" Classes="Flat SidebarToggle">
-                        <icon:MaterialIcon Kind="Menu" Width="16" Height="16" />
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="0" Margin="1" Height="22" VerticalAlignment="Top">
+                    <Button Command="{Binding ToggleSidebarCommand}" Classes="Flat SidebarToggle"
+                            Classes.Active="{Binding #Root.DataContext.IsSidebarOpen}">
+                        <TextBlock Classes="IconGlyph" Text="☰" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
                     </Button>
                     <Button Command="{Binding AddServerCommand}" Width="40" ToolTip.Tip="Add Server"
-                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat">
-                        <icon:MaterialIcon Kind="Plus" />
+                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat" Height="22" MinHeight="22" Padding="0">
+                        <TextBlock Classes="IconGlyph" Text="➕" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
                     </Button>
                     <Button Command="{Binding AddFolderCommand}" Width="40" ToolTip.Tip="Add Folder"
-                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat">
-                        <icon:MaterialIcon Kind="FolderPlus" />
+                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat" Height="22" MinHeight="22" Padding="0">
+                        <TextBlock Classes="IconGlyph" Text="📁" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
                     </Button>
                     <TextBlock Text="Servers" VerticalAlignment="Center" FontWeight="Bold" 
                                IsVisible="{Binding #Root.DataContext.IsSidebarOpen}"/>
@@ -277,7 +290,7 @@
                                         </ContextMenu>
                                     </StackPanel.ContextMenu>
                                     <!-- Icon -->
-                                    <icon:MaterialIcon Kind="ServerNetwork" Width="20" Height="20" />
+                                    <TextBlock Classes="IconGlyph" Text="🖥️" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                                     <StackPanel IsVisible="{Binding #Root.DataContext.IsSidebarOpen}">
                                         <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="12"/>
                                         <TextBlock Text="{Binding Host}" FontSize="10" Foreground="Gray"/>
@@ -313,10 +326,13 @@
                                             <StackPanel Orientation="Horizontal"
                                                         Spacing="6"
                                                         VerticalAlignment="Center">
-                                                <icon:MaterialIcon Kind="Folder"
-                                                                   Width="20"
-                                                                   Height="20"
-                                                                   VerticalAlignment="Center"/>
+                                                <TextBlock Classes="IconGlyph"
+                                                           Text="📁"
+                                                           Width="20"
+                                                           Height="20"
+                                                           VerticalAlignment="Center"
+                                                           HorizontalAlignment="Center"
+                                                           TextAlignment="Center"/>
                                                 <TextBlock Text="{Binding Name}"
                                                            FontWeight="Bold"
                                                            VerticalAlignment="Center"/>
@@ -348,7 +364,7 @@
                                                                           CommandParameter="{Binding}"/>
                                                             </ContextMenu>
                                                         </StackPanel.ContextMenu>
-                                                        <icon:MaterialIcon Kind="ServerNetwork" Width="20" Height="20" />
+                                                        <TextBlock Classes="IconGlyph" Text="🖥️" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" />
                                                         <StackPanel IsVisible="{Binding #Root.DataContext.IsSidebarOpen}">
                                                             <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="12"/>
                                                             <TextBlock Text="{Binding Host}" FontSize="10" Foreground="Gray"/>
@@ -406,12 +422,14 @@
                                                   ColumnSpacing="6"
                                                   VerticalAlignment="Center"
                                                   HorizontalAlignment="Stretch">
-                                                <icon:MaterialIcon Kind="ServerNetwork"
-                                                                   Grid.Column="0"
-                                                                   Width="13"
-                                                                   Height="13"
-                                                                   Foreground="#8D9DB1"
-                                                                   VerticalAlignment="Center"/>
+                                                <TextBlock Classes="IconGlyph"
+                                                           Grid.Column="0"
+                                                           Text="🖥️"
+                                                           Width="16"
+                                                           Height="16"
+                                                           Foreground="#8D9DB1"
+                                                           VerticalAlignment="Center"
+                                                           TextAlignment="Center"/>
                                                 <TextBlock Classes="TabHeaderText"
                                                            Grid.Column="1"
                                                            Text="{Binding Header}"
@@ -425,7 +443,7 @@
                                                         HorizontalAlignment="Right"
                                                         VerticalAlignment="Center"
                                                         ToolTip.Tip="Close Tab">
-                                                    <icon:MaterialIcon Kind="Close" Width="12" Height="12"/>
+                                                    <TextBlock Classes="IconGlyph" Text="✖️" Width="14" Height="14" TextAlignment="Center"/>
                                                 </Button>
                                             </Grid>
                                         </Border>
@@ -434,7 +452,7 @@
                                         <Button Classes="AddTab"
                                                 Command="{Binding #Root.DataContext.AddTabCommand}"
                                                 ToolTip.Tip="New Server">
-                                            <icon:MaterialIcon Kind="Plus" Width="16" Height="16"/>
+                                            <TextBlock Classes="IconGlyph" Text="➕" Width="16" Height="16" TextAlignment="Center"/>
                                         </Button>
                                     </DataTemplate>
                                 </ContentControl.DataTemplates>

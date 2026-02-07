@@ -4,7 +4,6 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:NoBSSftp.ViewModels"
              xmlns:models="using:NoBSSftp.Models"
-             xmlns:icon="using:Material.Icons.Avalonia"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:Class="NoBSSftp.Views.FileBrowserView"
              x:DataType="vm:SessionViewModel"
@@ -55,13 +54,13 @@
             </Button>
             <ToggleButton IsChecked="{Binding ShowHiddenFiles}" ToolTip.Tip="Show Hidden Files" Padding="6">
                 <StackPanel Orientation="Horizontal" Spacing="5">
-                    <icon:MaterialIcon Kind="Eye" />
+                    <TextBlock Text="👁️" VerticalAlignment="Center"/>
                     <TextBlock Text="Hidden" VerticalAlignment="Center"/>
                 </StackPanel>
             </ToggleButton>
             <Button Command="{Binding OpenExternalTerminalCommand}" ToolTip.Tip="Open OS Terminal" Padding="6">
                 <StackPanel Orientation="Horizontal" Spacing="5">
-                    <icon:MaterialIcon Kind="Console" />
+                    <TextBlock Text="💻" VerticalAlignment="Center"/>
                     <TextBlock Text="Terminal" VerticalAlignment="Center"/>
                 </StackPanel>
             </Button>
@@ -146,13 +145,17 @@
                                                     DragDrop.DragOver="OnRowDragOver"
                                                     DragDrop.Drop="OnRowDrop">
                                             <!-- Folder Icon -->
-                                            <icon:MaterialIcon Kind="Folder" Foreground="#E8A87C"
-                                                               IsVisible="{Binding IsDirectory}"
-                                                               Width="20" Height="20"/>
+                                            <TextBlock Text="📁" Foreground="#E8A87C"
+                                                       IsVisible="{Binding IsDirectory}"
+                                                       Width="20" Height="20"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Center"/>
                                             <!-- File Icon -->
-                                            <icon:MaterialIcon Kind="FileDocumentOutline" Foreground="Gray"
-                                                               IsVisible="{Binding !IsDirectory}"
-                                                               Width="20" Height="20"/>
+                                            <TextBlock Text="📄" Foreground="Gray"
+                                                       IsVisible="{Binding !IsDirectory}"
+                                                       Width="20" Height="20"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Center"/>
                                             <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </DataTemplate>
@@ -222,11 +225,12 @@
                     <StackPanel Spacing="8"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
-                        <icon:MaterialIcon Kind="ServerNetwork"
-                                           Width="28"
-                                           Height="28"
-                                           Foreground="#9AA4B1"
-                                           HorizontalAlignment="Center"/>
+                        <TextBlock Text="🖥️"
+                                   Width="28"
+                                   Height="28"
+                                   Foreground="#9AA4B1"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"/>
                         <TextBlock Text="{Binding SuggestedServerPrimary.Name}"
                                    FontSize="16"
                                    FontWeight="SemiBold"
@@ -265,11 +269,12 @@
                     <StackPanel Spacing="8"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
-                        <icon:MaterialIcon Kind="ServerNetwork"
-                                           Width="28"
-                                           Height="28"
-                                           Foreground="#9AA4B1"
-                                           HorizontalAlignment="Center"/>
+                        <TextBlock Text="🖥️"
+                                   Width="28"
+                                   Height="28"
+                                   Foreground="#9AA4B1"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"/>
                         <TextBlock Text="{Binding SuggestedServerPrimary.Name}"
                                    FontSize="16"
                                    FontWeight="SemiBold"
@@ -303,11 +308,12 @@
                     <StackPanel Spacing="8"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
-                        <icon:MaterialIcon Kind="ServerNetwork"
-                                           Width="28"
-                                           Height="28"
-                                           Foreground="#9AA4B1"
-                                           HorizontalAlignment="Center"/>
+                        <TextBlock Text="🖥️"
+                                   Width="28"
+                                   Height="28"
+                                   Foreground="#9AA4B1"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"/>
                         <TextBlock Text="{Binding SuggestedServerSecondary.Name}"
                                    FontSize="16"
                                    FontWeight="SemiBold"
