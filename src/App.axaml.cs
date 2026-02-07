@@ -40,6 +40,19 @@ public partial class App : Application
             {
                 DataContext = new MainWindowViewModel(),
             };
+
+            _ = Task.Run(
+                async () =>
+                {
+                    try
+                    {
+                        await StartupPermissionWarmupService.WarmUpAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        LoggingService.Warn($"Startup permission warm-up failed: {ex.Message}");
+                    }
+                });
         }
 
         base.OnFrameworkInitializationCompleted();

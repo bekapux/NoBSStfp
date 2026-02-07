@@ -120,7 +120,8 @@ public class DialogService : IDialogService
             {
                 Title = title,
                 Width = 300,
-                Height = 120,
+                SizeToContent = SizeToContent.Height,
+                CanResize = false,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 SystemDecorations = SystemDecorations.BorderOnly
             };
@@ -171,9 +172,9 @@ public class DialogService : IDialogService
             {
                 Title = title,
                 Width = 620,
-                Height = 360,
                 MinWidth = 620,
-                MinHeight = 360,
+                SizeToContent = SizeToContent.Height,
+                CanResize = false,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 SystemDecorations = SystemDecorations.BorderOnly
             };
@@ -192,18 +193,19 @@ public class DialogService : IDialogService
                 BorderBrush = isWarning ? Avalonia.Media.Brushes.IndianRed : Avalonia.Media.Brushes.Gray,
                 Background = Avalonia.Media.Brushes.Black,
                 Padding = new Thickness(8),
-                MinHeight = 180
+                MinHeight = 120
             };
         var detailsScroll =
             new ScrollViewer
             {
-                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                MaxHeight = 280,
                 Content =
                     new TextBlock
                     {
                         Text = details,
-                        TextWrapping = Avalonia.Media.TextWrapping.NoWrap,
+                        TextWrapping = Avalonia.Media.TextWrapping.WrapWithOverflow,
                         FontFamily = "Menlo,Consolas,Courier New,monospace",
                         Foreground = Avalonia.Media.Brushes.White
                     }
@@ -331,6 +333,8 @@ public class DialogService : IDialogService
         var hostBox = new TextBox { Watermark = "Server IP Address / Host", Text = existing?.Host ?? "" };
         var portBox = new TextBox { Watermark = "Port", Text = existing?.Port.ToString() ?? "22" };
         var userBox = new TextBox { Watermark = "Username", Text = existing?.Username ?? "root" };
+        var passLabel = new TextBlock { Text = "Password:" };
+        var passBox = new TextBox { PasswordChar = '*', Watermark = "Password", Text = existing?.Password ?? "" };
         var useKeyBox = new CheckBox { Content = "Use private key", IsChecked = existing?.UsePrivateKey ?? false };
         var keyPathLabel = new TextBlock { Text = "Private Key Path:" };
         var keyPathBox = new TextBox { Watermark = "Private key path", Text = existing?.PrivateKeyPath ?? "" };
@@ -350,6 +354,8 @@ public class DialogService : IDialogService
         stack.Children.Add(portBox);
         stack.Children.Add(new TextBlock { Text = "Username:" });
         stack.Children.Add(userBox);
+        stack.Children.Add(passLabel);
+        stack.Children.Add(passBox);
         stack.Children.Add(useKeyBox);
         stack.Children.Add(keyPathLabel);
         var keyPathRow =
@@ -385,6 +391,8 @@ public class DialogService : IDialogService
         void UpdateVisibility()
         {
             var useKey = useKeyBox.IsChecked ?? false;
+            passLabel.IsVisible = !useKey;
+            passBox.IsVisible = !useKey;
             keyPathLabel.IsVisible = useKey;
             keyPathBox.IsVisible = useKey;
             keyBrowseBtn.IsVisible = useKey;
@@ -404,6 +412,7 @@ public class DialogService : IDialogService
                 _) =>
             {
                 if (!int.TryParse(portBox.Text, out var port)) return;
+                var useKey = useKeyBox.IsChecked ?? false;
 
                 result =
                     new ServerProfile
@@ -413,9 +422,10 @@ public class DialogService : IDialogService
                         Host = hostBox.Text ?? "localhost",
                         Port = port,
                         Username = userBox.Text ?? "root",
-                        UsePrivateKey = useKeyBox.IsChecked ?? false,
+                        Password = useKey ? string.Empty : (passBox.Text ?? string.Empty),
+                        UsePrivateKey = useKey,
                         PrivateKeyPath = keyPathBox.Text ?? "",
-                        PrivateKeyPassphrase = keyPassBox.Text ?? ""
+                        PrivateKeyPassphrase = useKey ? (keyPassBox.Text ?? string.Empty) : string.Empty
                     };
                 window.Close();
             };
@@ -461,7 +471,16 @@ public class DialogService : IDialogService
 
         var userBox = new TextBox { Text = defaults?.Username ?? "root" };
         var useKeyBox = new CheckBox { Content = "Use private key", IsChecked = defaults?.UsePrivateKey ?? false };
+        var passLabel = new TextBlock { Text = "Password:" };
         var passBox = new TextBox { PasswordChar = '*', Watermark = "Password" };
+        var passHint =
+            new TextBlock
+            {
+                Text = "Leave blank to use saved password (requires Touch ID/device verification).",
+                FontSize = 11,
+                Foreground = Avalonia.Media.Brushes.Gray,
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            };
         var keyPathLabel = new TextBlock { Text = "Private Key Path:" };
         var keyPathBox = new TextBox { Watermark = "Private key path", Text = defaults?.PrivateKeyPath ?? "" };
         var keyBrowseBtn = new Button { Content = "Browse..." };
@@ -469,15 +488,24 @@ public class DialogService : IDialogService
         var keyPassBox =
             new TextBox
             {
-                PasswordChar = '*', Watermark = "Key passphrase (optional)", Text = defaults?.PrivateKeyPassphrase ?? ""
+                PasswordChar = '*', Watermark = "Key passphrase (optional)"
+            };
+        var keyPassHint =
+            new TextBlock
+            {
+                Text = "Leave blank to use saved key passphrase (requires Touch ID/device verification).",
+                FontSize = 11,
+                Foreground = Avalonia.Media.Brushes.Gray,
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
             };
 
         stack.Children.Add(new TextBlock { Text = $"Connect to {host}" });
         stack.Children.Add(new TextBlock { Text = "Username:" });
         stack.Children.Add(userBox);
         stack.Children.Add(useKeyBox);
-        stack.Children.Add(new TextBlock { Text = "Password:" });
+        stack.Children.Add(passLabel);
         stack.Children.Add(passBox);
+        stack.Children.Add(passHint);
         stack.Children.Add(keyPathLabel);
         var keyPathRow =
             new Grid
@@ -494,6 +522,7 @@ public class DialogService : IDialogService
         stack.Children.Add(keyPathRow);
         stack.Children.Add(keyPassLabel);
         stack.Children.Add(keyPassBox);
+        stack.Children.Add(keyPassHint);
 
         var btnPanel =
             new StackPanel
@@ -512,12 +541,15 @@ public class DialogService : IDialogService
         void UpdateVisibility()
         {
             var useKey = useKeyBox.IsChecked ?? false;
+            passLabel.IsVisible = !useKey;
             passBox.IsVisible = !useKey;
+            passHint.IsVisible = !useKey;
             keyPathLabel.IsVisible = useKey;
             keyPathBox.IsVisible = useKey;
             keyBrowseBtn.IsVisible = useKey;
             keyPassLabel.IsVisible = useKey;
             keyPassBox.IsVisible = useKey;
+            keyPassHint.IsVisible = useKey;
         }
 
         useKeyBox.IsCheckedChanged +=
@@ -531,14 +563,15 @@ public class DialogService : IDialogService
             (_,
                 _) =>
             {
+                var useKey = useKeyBox.IsChecked ?? false;
                 result =
                     new ConnectInfo
                     {
                         Username = userBox.Text ?? "",
-                        Password = passBox.Text ?? "",
-                        UsePrivateKey = useKeyBox.IsChecked ?? false,
+                        Password = useKey ? string.Empty : (passBox.Text ?? string.Empty),
+                        UsePrivateKey = useKey,
                         PrivateKeyPath = keyPathBox.Text ?? "",
-                        PrivateKeyPassphrase = keyPassBox.Text ?? ""
+                        PrivateKeyPassphrase = useKey ? (keyPassBox.Text ?? string.Empty) : string.Empty
                     };
                 window.Close();
             };

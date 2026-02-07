@@ -20,7 +20,8 @@
 
         <!-- Connection Bar -->
         <StackPanel Grid.Row="0" Spacing="6" Margin="5,10,5,5"
-            IsVisible="{Binding !IsConnected}">
+            IsVisible="{Binding !IsConnected}"
+            IsEnabled="{Binding !IsConnecting}">
             <StackPanel Orientation="Horizontal" Spacing="5">
                 <TextBox Text="{Binding Profile.Host}" Watermark="Host" Width="150" />
                 <TextBox Text="{Binding Profile.Username}" Watermark="User" Width="100" />
@@ -197,7 +198,7 @@
         </Grid>
 
         <!-- Disconnected Suggestions -->
-        <Grid Grid.Row="2" IsVisible="{Binding !IsConnected}" Margin="5">
+        <Grid Grid.Row="2" IsVisible="{Binding !IsConnected}" Margin="5" IsEnabled="{Binding !IsConnecting}">
             <TextBlock IsVisible="{Binding !HasSuggestedServerPrimary}"
                        Text="No saved servers"
                        FontSize="12"
@@ -329,6 +330,23 @@
                 </Button>
             </Grid>
         </Grid>
+
+        <Border Grid.Row="2"
+                IsVisible="{Binding IsConnecting}"
+                Background="#66000000"
+                Margin="5">
+            <StackPanel Spacing="10"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                <ProgressBar IsIndeterminate="True"
+                             Width="140"
+                             Height="8"/>
+                <TextBlock Text="Connecting..."
+                           FontSize="12"
+                           Foreground="#D0D0D0"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Border>
 
     </Grid>
 </UserControl>

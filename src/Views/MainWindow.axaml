@@ -10,7 +10,7 @@
         x:DataType="vm:MainWindowViewModel"
         x:Name="Root"
         Icon="/Assets/icon.ico"
-        Title="NoBSSftp">
+        Title="{Binding AppTitle}">
 
     <Window.Styles>
         <Style Selector="Button.Flat">
@@ -230,7 +230,7 @@
       <SplitView Grid.Row="1" DisplayMode="CompactInline" IsPaneOpen="{Binding IsSidebarOpen}"
                  OpenPaneLength="250" CompactPaneLength="24">
         <SplitView.Pane>
-            <Grid RowDefinitions="Auto, *">
+            <Grid RowDefinitions="Auto,*,Auto">
                 <!-- Sidebar Header -->
                 <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="0" Margin="1">
                     <Button Command="{Binding ToggleSidebarCommand}" Classes="Flat SidebarToggle">

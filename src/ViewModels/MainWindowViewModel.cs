@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia;
@@ -16,6 +17,8 @@ public partial class MainWindowViewModel : ViewModelBase
 {
     private readonly IProfileManager _profileManager;
     private readonly IDialogService _dialogService;
+    private readonly IUserVerificationService _userVerificationService;
+    public string AppTitle { get; } = $"NoBSSftp v{ResolveAppVersion()}";
 
     public ObservableCollection<object> TabItems { get; } = [];
     public ObservableCollection<ServerProfile> RootServers { get; } = [];
@@ -33,6 +36,7 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         _profileManager = new ProfileManager();
         _dialogService = new DialogService();
+        _userVerificationService = new UserVerificationService();
 
         TabItems.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasTabs));
         TabItems.Add(_addTabItem);
@@ -62,6 +66,23 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public bool HasTabs => TabItems.OfType<SessionViewModel>().Any();
 
+    private static string ResolveAppVersion()
+    {
+        var assembly = typeof(MainWindowViewModel).Assembly;
+        var informational = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        var value = string.IsNullOrWhiteSpace(informational)
+            ? assembly.GetName().Version?.ToString()
+            : informational;
+
+        if (string.IsNullOrWhiteSpace(value))
+            return "unknown";
+
+        var plusIndex = value.IndexOf('+');
+        return plusIndex > 0 ? value[..plusIndex] : value;
+    }
+
     [RelayCommand]
     private void ToggleSidebar()
     {
@@ -74,6 +95,9 @@ public partial class MainWindowViewModel : ViewModelBase
         var newProfile = await _dialogService.ShowServerFormAsync();
         if (newProfile is not null)
         {
+            await _profileManager.SaveCredentialsAsync(newProfile.Id, newProfile.Password, newProfile.PrivateKeyPassphrase);
+            newProfile.Password = string.Empty;
+            newProfile.PrivateKeyPassphrase = string.Empty;
             RootServers.Add(newProfile);
             await SaveLibraryAsync();
             RefreshSessionSuggestions();
@@ -85,9 +109,26 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (profile is null) return;
 
+        var existingSecrets = await _profileManager.LoadCredentialsAsync(profile.Id) ?? new CredentialSecrets();
         var updatedProfile = await _dialogService.ShowServerFormAsync(profile);
         if (updatedProfile is not null)
         {
+            var passwordToPersist =
+                updatedProfile.UsePrivateKey
+                    ? string.Empty
+                    : (!string.IsNullOrEmpty(updatedProfile.Password)
+                        ? updatedProfile.Password
+                        : existingSecrets.Password ?? string.Empty);
+            var keyPassphraseToPersist =
+                updatedProfile.UsePrivateKey
+                    ? (!string.IsNullOrEmpty(updatedProfile.PrivateKeyPassphrase)
+                        ? updatedProfile.PrivateKeyPassphrase
+                        : existingSecrets.PrivateKeyPassphrase ?? string.Empty)
+                    : string.Empty;
+            await _profileManager.SaveCredentialsAsync(updatedProfile.Id, passwordToPersist, keyPassphraseToPersist);
+            updatedProfile.Password = string.Empty;
+            updatedProfile.PrivateKeyPassphrase = string.Empty;
+
             var list = FindServerList(profile);
             if (list is null) return;
             var index = list.IndexOf(profile);
@@ -106,6 +147,7 @@ public partial class MainWindowViewModel : ViewModelBase
         var confirm = await _dialogService.ConfirmAsync("Delete Server", $"Delete '{profile.Name}'?");
         if (confirm)
         {
+            await _profileManager.DeleteCredentialsAsync(profile.Id);
             list.Remove(profile);
             await SaveLibraryAsync();
             RefreshSessionSuggestions();
@@ -120,27 +162,109 @@ public partial class MainWindowViewModel : ViewModelBase
         var credentials = await _dialogService.ShowConnectDialogAsync("Connect", profile.Host, profile);
         if (credentials is null) return;
 
-        var sessionProfile =
-            new ServerProfile
-            {
-                Id = profile.Id,
-                Name = profile.Name,
-                Host = profile.Host,
-                Port = profile.Port,
-                Username = credentials.Username,
-                Password = credentials.Password,
-                UsePrivateKey = credentials.UsePrivateKey,
-                PrivateKeyPath = credentials.PrivateKeyPath,
-                PrivateKeyPassphrase = credentials.PrivateKeyPassphrase
-            };
+        var connectionProfile = CloneProfile(profile);
+        connectionProfile.Username = credentials.Username;
+        connectionProfile.UsePrivateKey = credentials.UsePrivateKey;
+        connectionProfile.PrivateKeyPath = credentials.PrivateKeyPath;
 
-        var newTab = CreateSessionTab(sessionProfile);
+        var enteredPassword = credentials.Password ?? string.Empty;
+        var enteredKeyPassphrase = credentials.PrivateKeyPassphrase ?? string.Empty;
+        var needsSavedSecret =
+            credentials.UsePrivateKey
+                ? string.IsNullOrEmpty(enteredKeyPassphrase)
+                : string.IsNullOrEmpty(enteredPassword);
+
+        var savedSecrets = new CredentialSecrets();
+        if (needsSavedSecret)
+        {
+            var verified = await _userVerificationService.VerifyForConnectionAsync(profile);
+            if (!verified)
+                return;
+
+            savedSecrets = await _profileManager.LoadCredentialsAsync(profile.Id) ?? new CredentialSecrets();
+        }
+
+        var shouldPersistSecrets = false;
+        var passwordToPersist = string.Empty;
+        var keyPassphraseToPersist = string.Empty;
+
+        if (credentials.UsePrivateKey)
+        {
+            connectionProfile.Password = string.Empty;
+            if (string.IsNullOrWhiteSpace(connectionProfile.PrivateKeyPath))
+                connectionProfile.PrivateKeyPath = profile.PrivateKeyPath;
+            if (string.IsNullOrWhiteSpace(connectionProfile.PrivateKeyPath))
+            {
+                await _dialogService.ConfirmAsync("Missing Key Path",
+                    "Private key path is required for key authentication.");
+                return;
+            }
+
+            connectionProfile.PrivateKeyPassphrase =
+                !string.IsNullOrEmpty(enteredKeyPassphrase)
+                    ? enteredKeyPassphrase
+                    : (needsSavedSecret ? savedSecrets.PrivateKeyPassphrase ?? string.Empty : string.Empty);
+
+            passwordToPersist = string.Empty;
+            keyPassphraseToPersist = connectionProfile.PrivateKeyPassphrase;
+            shouldPersistSecrets = !string.IsNullOrEmpty(enteredKeyPassphrase);
+        }
+        else
+        {
+            connectionProfile.UsePrivateKey = false;
+            connectionProfile.PrivateKeyPath = string.Empty;
+            connectionProfile.PrivateKeyPassphrase = string.Empty;
+            connectionProfile.Password =
+                !string.IsNullOrEmpty(enteredPassword)
+                    ? enteredPassword
+                    : (needsSavedSecret ? savedSecrets.Password ?? string.Empty : string.Empty);
+
+            if (string.IsNullOrEmpty(connectionProfile.Password))
+            {
+                await _dialogService.ConfirmAsync("Missing Password",
+                    "No saved password found. Enter a password or enable key authentication.");
+                return;
+            }
+
+            passwordToPersist = connectionProfile.Password;
+            keyPassphraseToPersist = string.Empty;
+            shouldPersistSecrets = !string.IsNullOrEmpty(enteredPassword);
+        }
+
+        profile.Username = connectionProfile.Username;
+        profile.UsePrivateKey = connectionProfile.UsePrivateKey;
+        profile.PrivateKeyPath = connectionProfile.PrivateKeyPath;
+        profile.Password = string.Empty;
+        profile.PrivateKeyPassphrase = string.Empty;
+
+        if (shouldPersistSecrets)
+            await _profileManager.SaveCredentialsAsync(profile.Id, passwordToPersist, keyPassphraseToPersist);
+        await SaveLibraryAsync();
+        RefreshSessionSuggestions();
+
+        var newTab = CreateSessionTab(connectionProfile);
 
         InsertBeforeAddTab(newTab);
 
         SelectedTabItem = newTab;
 
         await newTab.Connect();
+    }
+
+    private static ServerProfile CloneProfile(ServerProfile source)
+    {
+        return new ServerProfile
+        {
+            Id = source.Id,
+            Name = source.Name,
+            Host = source.Host,
+            Port = source.Port,
+            Username = source.Username,
+            Password = source.Password,
+            UsePrivateKey = source.UsePrivateKey,
+            PrivateKeyPath = source.PrivateKeyPath,
+            PrivateKeyPassphrase = source.PrivateKeyPassphrase
+        };
     }
 
     [RelayCommand]

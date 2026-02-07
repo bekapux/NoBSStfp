@@ -16,6 +16,8 @@ public partial class SessionViewModel : ViewModelBase
 {
     private readonly ISftpService _sftpService;
     private readonly IDialogService _dialogService;
+    private readonly IProfileManager _profileManager;
+    private readonly IUserVerificationService _userVerificationService;
     private CancellationTokenSource? _transferCts;
     private DateTime _lastExternalTerminalLaunchUtc = DateTime.MinValue;
     private DateTime _lastSuggestionConnectUtc = DateTime.MinValue;
@@ -32,6 +34,9 @@ public partial class SessionViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(OpenExternalTerminalCommand))]
     private bool _isConnected;
+
+    [ObservableProperty]
+    private bool _isConnecting;
 
     [ObservableProperty]
     private string _statusMessage = "Ready";
@@ -101,6 +106,8 @@ public partial class SessionViewModel : ViewModelBase
     {
         _sftpService = new SftpService();
         _dialogService = new DialogService();
+        _profileManager = new ProfileManager();
+        _userVerificationService = new UserVerificationService();
         _profile = profile;
         Header = GetDisplayName();
     }
@@ -125,6 +132,7 @@ public partial class SessionViewModel : ViewModelBase
     private async Task ConnectSuggestion(ServerProfile? suggestion)
     {
         if (suggestion is null) return;
+        if (IsConnecting) return;
 
         var now = DateTime.UtcNow;
         if (now - _lastSuggestionConnectUtc < TimeSpan.FromMilliseconds(600))
@@ -136,7 +144,85 @@ public partial class SessionViewModel : ViewModelBase
         if (credentials is null)
             return;
 
-        ApplyConnectionSuggestion(suggestion, credentials);
+        var resolvedPassword = credentials.Password ?? string.Empty;
+        var resolvedKeyPassphrase = credentials.PrivateKeyPassphrase ?? string.Empty;
+        var resolvedKeyPath = credentials.PrivateKeyPath ?? string.Empty;
+        var needsSavedSecret =
+            credentials.UsePrivateKey
+                ? string.IsNullOrEmpty(resolvedKeyPassphrase)
+                : string.IsNullOrEmpty(resolvedPassword);
+
+        var savedSecrets = new CredentialSecrets();
+        if (needsSavedSecret)
+        {
+            var verified = await _userVerificationService.VerifyForConnectionAsync(suggestion);
+            if (!verified)
+                return;
+
+            savedSecrets = await _profileManager.LoadCredentialsAsync(suggestion.Id) ?? new CredentialSecrets();
+        }
+
+        var shouldPersistSecrets = false;
+        var passwordToPersist = string.Empty;
+        var keyPassphraseToPersist = string.Empty;
+
+        if (credentials.UsePrivateKey)
+        {
+            if (string.IsNullOrWhiteSpace(resolvedKeyPath))
+                resolvedKeyPath = suggestion.PrivateKeyPath;
+
+            if (string.IsNullOrWhiteSpace(resolvedKeyPath))
+            {
+                await _dialogService.ConfirmAsync("Missing Key Path",
+                    "Private key path is required for key authentication.");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(resolvedKeyPassphrase))
+                resolvedKeyPassphrase = needsSavedSecret ? savedSecrets.PrivateKeyPassphrase ?? string.Empty : string.Empty;
+
+            resolvedPassword = string.Empty;
+            keyPassphraseToPersist = resolvedKeyPassphrase;
+            shouldPersistSecrets = !string.IsNullOrEmpty(credentials.PrivateKeyPassphrase);
+        }
+        else
+        {
+            if (string.IsNullOrEmpty(resolvedPassword))
+                resolvedPassword = needsSavedSecret ? savedSecrets.Password ?? string.Empty : string.Empty;
+
+            if (string.IsNullOrEmpty(resolvedPassword))
+            {
+                await _dialogService.ConfirmAsync("Missing Password",
+                    "No saved password found. Enter a password or enable key authentication.");
+                return;
+            }
+
+            resolvedKeyPath = string.Empty;
+            resolvedKeyPassphrase = string.Empty;
+            passwordToPersist = resolvedPassword;
+            shouldPersistSecrets = !string.IsNullOrEmpty(credentials.Password);
+        }
+
+        if (shouldPersistSecrets)
+            await _profileManager.SaveCredentialsAsync(suggestion.Id, passwordToPersist, keyPassphraseToPersist);
+
+        suggestion.Username = credentials.Username;
+        suggestion.UsePrivateKey = credentials.UsePrivateKey;
+        suggestion.PrivateKeyPath = resolvedKeyPath;
+        suggestion.Password = string.Empty;
+        suggestion.PrivateKeyPassphrase = string.Empty;
+
+        var resolved =
+            new ConnectInfo
+            {
+                Username = credentials.Username,
+                Password = resolvedPassword,
+                UsePrivateKey = credentials.UsePrivateKey,
+                PrivateKeyPath = resolvedKeyPath,
+                PrivateKeyPassphrase = resolvedKeyPassphrase
+            };
+
+        ApplyConnectionSuggestion(suggestion, resolved);
         await Connect();
     }
 
@@ -199,11 +285,15 @@ public partial class SessionViewModel : ViewModelBase
     [RelayCommand]
     public async Task Connect()
     {
+        if (IsConnecting)
+            return;
+
         var attemptedHost = Profile.Host;
         var attemptedUsername = Profile.Username;
 
         try
         {
+            IsConnecting = true;
             StatusMessage = "Connecting...";
             await _sftpService.ConnectAsync(Profile);
 
@@ -232,6 +322,10 @@ public partial class SessionViewModel : ViewModelBase
             OnPropertyChanged(nameof(Profile));
             ConnectFailureFocusRequestId++;
             StatusMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsConnecting = false;
         }
     }
 

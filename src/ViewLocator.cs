@@ -17,9 +17,6 @@ public class ViewLocator : IDataTemplate
             
         if (data is SessionViewModel)
             return new FileBrowserView();
-            
-        if (data is TerminalViewModel)
-            return new TerminalView();
 
         return new TextBlock { Text = "Not Found: " + data.GetType().Name };
     }

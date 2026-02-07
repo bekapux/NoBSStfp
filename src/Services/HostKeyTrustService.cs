@@ -117,7 +117,8 @@ public class HostKeyTrustService : IHostKeyTrustService
             $"Port: {port}\n" +
             $"Algorithm: {algorithm}\n" +
             $"Key length: {keyLength}\n" +
-            $"Fingerprint (SHA256): {fingerprint}\n\n" +
+            "Fingerprint (SHA256):\n" +
+            $"{fingerprint}\n\n" +
             "Trust this host key and continue?";
 
         return PromptForTrust("Verify SSH Host Key", message, details, isWarning: false);
@@ -136,8 +137,10 @@ public class HostKeyTrustService : IHostKeyTrustService
             $"Port: {port}\n" +
             $"Algorithm: {algorithm}\n" +
             $"Key length: {keyLength}\n\n" +
-            $"Stored fingerprint (SHA256): {storedFingerprint}\n" +
-            $"Presented fingerprint (SHA256): {presentedFingerprint}\n\n" +
+            "Stored fingerprint (SHA256):\n" +
+            $"{storedFingerprint}\n\n" +
+            "Presented fingerprint (SHA256):\n" +
+            $"{presentedFingerprint}\n\n" +
             "If you were not expecting this change, reject and investigate.\n" +
             "Trust the new host key and continue?";
 

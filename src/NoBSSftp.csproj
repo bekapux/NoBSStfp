@@ -29,13 +29,11 @@
         <Authors>Beka Pukhashvili</Authors>
         <Company>No BS</Company>
         <RootNamespace>NoBSSftp</RootNamespace>
-        <Version>0.1.0</Version>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <CFBundleName>NoBSSftp</CFBundleName>
         <CFBundleDisplayName>NoBSSftp</CFBundleDisplayName>
         <CFBundleIdentifier>com.nobs.sftp</CFBundleIdentifier>
-        <CFBundleShortVersionString>0.1.0</CFBundleShortVersionString>
-        <CFBundleVersion>0.1.0</CFBundleVersion>
+        <Version>0.8.0</Version>
         <CFBundleIconFile>NoBSSftp.icns</CFBundleIconFile>
     </PropertyGroup>
 

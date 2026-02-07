@@ -1,6 +1,6 @@
 # NoBSSftp TODO / Implementation Backlog
 
-Last updated: 2026-02-06
+Last updated: 2026-02-07
 
 This file tracks known feature gaps and implementation work identified from the current codebase.
 
@@ -23,8 +23,14 @@ This file tracks known feature gaps and implementation work identified from the 
     - No plaintext credentials in profile storage.
     - Existing profiles migrate safely.
     - Login works for password and key-passphrase flows.
+  - Status:
+    - Implemented for macOS Keychain using native Security.framework APIs.
+    - `servers.json` is now sanitized (password/passphrase removed on save).
+    - Saved-secret reuse in connect flow is gated by macOS device-owner verification.
+    - Keychain reads are on-demand in connect paths, avoiding startup keychain prompt cycles.
+    - Remaining work: Windows and Linux secure backends.
 
-- [ ] SSH host key verification and trust management
+- [x] SSH host key verification and trust management
   - Problem: no known-host trust prompt/fingerprint pinning flow.
   - Implementation target:
     - Show fingerprint prompt on first connection.
@@ -34,6 +40,8 @@ This file tracks known feature gaps and implementation work identified from the 
     - First-connect prompt appears.
     - MITM-style host key mismatch is blocked by default.
     - Trust decisions persist across app restarts.
+  - Status:
+    - Implemented via persisted `known_hosts.json` trust store and first-seen/mismatch trust dialogs.
 
 ## P1 - Core Capability Gaps
 
@@ -75,17 +83,36 @@ This file tracks known feature gaps and implementation work identified from the 
     - Verification result is visible per transfer.
     - Corruption is surfaced clearly.
 
-## P1 - Product Consistency
+## P1 - Product Direction
 
-- [ ] Resolve terminal product/docs mismatch
-  - Problem: README claims built-in terminal, while active session UI uses external terminal launch.
-  - Decision required:
-    - Option A: restore/ship embedded terminal in session UI.
-    - Option B: keep external-terminal-only flow and update docs/features copy.
+- [x] Terminal strategy: external terminal only
+  - Decision:
+    - The app uses OS terminal launch for SSH access from session UI.
   - Acceptance criteria:
     - Product behavior and README feature list are consistent.
 
+- [x] Remove deprecated embedded-terminal code paths
+  - Problem:
+    - Legacy embedded terminal classes remain in the codebase and can cause confusion.
+  - Implementation target:
+    - Remove or clearly quarantine unused in-app terminal view/viewmodel/emulator code.
+  - Acceptance criteria:
+    - No ambiguity about supported terminal mode.
+  - Status:
+    - Removed embedded terminal view/viewmodel/emulator and template routing references.
+
 ## P2 - File Manager and Workflow Features
+
+- [x] Connecting-state UX feedback
+  - Problem: connect action had no clear in-context loading state.
+  - Implementation target:
+    - Add centered connecting indicator in explorer area.
+    - Prevent duplicate connect clicks while connect is in progress.
+  - Acceptance criteria:
+    - Users see immediate connection feedback.
+    - Connect flow is guarded from re-entrant clicks.
+  - Status:
+    - Implemented with `IsConnecting` state + centered loading overlay.
 
 - [ ] Local+remote dual-pane workflow
   - Problem: current explorer is remote-only.

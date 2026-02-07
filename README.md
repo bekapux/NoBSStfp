@@ -1,13 +1,16 @@
 # NoBSSftp
 
-A no-nonsense, tabbed SFTP client built with Avalonia UI and .NET 10. It includes a file browser with drag-and-drop transfers plus an integrated SSH terminal view.
+A no-nonsense, tabbed SFTP client built with Avalonia UI and .NET 10. It includes a file browser with drag-and-drop transfers plus quick launch into your system SSH terminal.
 
 ## Features
 - Multi-tab SFTP sessions
 - Server library with folders, drag-and-drop ordering, and quick connect
 - File browser with CRUD, context menus, and keyboard shortcuts
 - External file drag-and-drop upload and internal drag-move
-- Built-in SSH terminal (xterm-style shell stream)
+- Centered connecting/loading indicator while establishing SFTP sessions
+- External SSH terminal launch from the active session
+- Secure credential persistence via OS keychain (macOS)
+- Verified quick-connect on saved servers via macOS LocalAuthentication (Touch ID / device auth)
 
 ## Tech Stack
 - .NET 10 (TargetFramework: net10.0)
@@ -49,7 +52,10 @@ dotnet publish NoBSStfp/src/NoBSSftp.csproj -c Release -r osx-arm64
 
 ## Notes
 - AOT + trimming is enabled; JSON serialization uses source generation for compatibility.
-- Terminal output is plain text; ANSI colors (SGR) are currently ignored.
+- Terminal access is provided via your OS terminal app (`ssh`) from inside the session UI.
+- Saved profile credentials are persisted in macOS Keychain via native Security.framework calls and stripped from `servers.json`.
+- Reusing saved secrets from the connect dialog requires macOS device-owner verification (Touch ID/password).
+- Keychain secrets are fetched on-demand during connect flows (not at app startup) to avoid prompt loops.
 
 ## License
 MIT
