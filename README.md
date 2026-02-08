@@ -6,7 +6,8 @@ A no-nonsense, tabbed SFTP client built with Avalonia UI and .NET 10. It include
 - Multi-tab SFTP sessions
 - Server library with folders, drag-and-drop ordering, and quick connect
 - File browser with CRUD, context menus, and keyboard shortcuts
-- External file drag-and-drop upload and internal drag-move
+- External file/folder drag-and-drop upload (recursive for directories) and internal drag-move
+- File and directory download to local destination (recursive for directories) with conflict resolution
 - Centered connecting/loading indicator while establishing SFTP sessions
 - External SSH terminal launch from the active session
 - Secure credential persistence via OS keychain (macOS)
@@ -17,7 +18,6 @@ A no-nonsense, tabbed SFTP client built with Avalonia UI and .NET 10. It include
 - Avalonia UI 11.3.x (MVVM)
 - SSH.NET for SFTP/SSH
 - CommunityToolkit.Mvvm for MVVM helpers
-- Material.Icons.Avalonia
 
 ## Project Layout
 ```

@@ -196,8 +196,56 @@
                 </Grid>
             </Border>
 
-            <!-- Status Bar -->
-            <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Margin="5" Foreground="Gray" />
+            <!-- Status + Transfer Queue -->
+            <StackPanel Grid.Row="1" Margin="5" Spacing="4">
+                <TextBlock Text="{Binding StatusMessage}" Foreground="Gray" />
+                <Border IsVisible="{Binding IsTransferQueueVisible}"
+                        BorderThickness="1"
+                        BorderBrush="#343434"
+                        Background="#171717"
+                        Padding="6">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="{Binding TransferQueueSummary}" Foreground="#8A929B" FontSize="11"/>
+                        <TextBlock Text="No transfers yet"
+                                   Foreground="#6F7680"
+                                   FontSize="10"
+                                   IsVisible="{Binding !HasTransferJobs}"/>
+                        <ScrollViewer Height="136"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding TransferJobs}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:TransferJob">
+                                        <Grid ColumnDefinitions="*,Auto,Auto"
+                                              ColumnSpacing="8"
+                                              Margin="0,1">
+                                            <StackPanel Grid.Column="0" Spacing="1">
+                                                <TextBlock Text="{Binding Title}"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Text="{Binding Status}"
+                                                           FontSize="10"
+                                                           Foreground="#8A929B"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding StateLabel}"
+                                                       FontSize="10"
+                                                       Foreground="#8A929B"
+                                                       VerticalAlignment="Center"/>
+                                            <Button Grid.Column="2"
+                                                    Content="Retry"
+                                                    Padding="6,2"
+                                                    Command="{Binding #FileBrowserRoot.DataContext.RetryTransferCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    IsVisible="{Binding IsRetryable}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
         </Grid>
 
         <!-- Disconnected Suggestions -->

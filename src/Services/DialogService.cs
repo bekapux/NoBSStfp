@@ -251,12 +251,29 @@ public class DialogService : IDialogService
         string sourceDetails,
         string destinationDetails)
     {
+        var result = await ConfirmConflictWithScopeAsync(
+            title,
+            message,
+            sourceDetails,
+            destinationDetails,
+            allowApplyToAll: false);
+        return result.Choice;
+    }
+
+    public async Task<ConflictDialogResult> ConfirmConflictWithScopeAsync(string title,
+        string message,
+        string sourceDetails,
+        string destinationDetails,
+        bool allowApplyToAll)
+    {
         var window =
             new Window
             {
                 Title = title,
-                Width = 420,
-                Height = 200,
+                Width = 520,
+                MinWidth = 520,
+                SizeToContent = SizeToContent.Height,
+                CanResize = false,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 SystemDecorations = SystemDecorations.BorderOnly
             };
@@ -274,6 +291,12 @@ public class DialogService : IDialogService
         var overwriteBtn = new Button { Content = "Overwrite" };
         var duplicateBtn = new Button { Content = "Duplicate" };
         var cancelBtn = new Button { Content = "Cancel", IsCancel = true };
+        var applyToAllBox =
+            new CheckBox
+            {
+                Content = "Apply this choice to all conflicts in this upload",
+                IsVisible = allowApplyToAll
+            };
 
         btnPanel.Children.Add(overwriteBtn);
         btnPanel.Children.Add(duplicateBtn);
@@ -281,16 +304,19 @@ public class DialogService : IDialogService
         stack.Children.Add(label);
         stack.Children.Add(sourceLabel);
         stack.Children.Add(destLabel);
+        stack.Children.Add(applyToAllBox);
         stack.Children.Add(btnPanel);
         window.Content = stack;
 
         var choice = ConflictChoice.Cancel;
+        var applyToAll = false;
 
         overwriteBtn.Click +=
             (_,
                 _) =>
             {
                 choice = ConflictChoice.Overwrite;
+                applyToAll = allowApplyToAll && (applyToAllBox.IsChecked ?? false);
                 window.Close();
             };
         duplicateBtn.Click +=
@@ -298,6 +324,7 @@ public class DialogService : IDialogService
                 _) =>
             {
                 choice = ConflictChoice.Duplicate;
+                applyToAll = allowApplyToAll && (applyToAllBox.IsChecked ?? false);
                 window.Close();
             };
         cancelBtn.Click +=
@@ -310,7 +337,7 @@ public class DialogService : IDialogService
         else
             window.Show();
 
-        return choice;
+        return new ConflictDialogResult(choice, applyToAll);
     }
 
     public async Task<ServerProfile?> ShowServerFormAsync(ServerProfile? existing = null)

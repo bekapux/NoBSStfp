@@ -20,12 +20,14 @@ public interface ISftpService
     Task UploadFileAsync(string localPath,
         string remotePath,
         IProgress<double> progress,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool resume = false);
 
     Task DownloadFileAsync(string remotePath,
         string localPath,
         IProgress<double> progress,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool resume = false);
 
     Task RenameFileAsync(string oldPath,
         string newPath);
@@ -143,31 +145,104 @@ public class SftpService : ISftpService
     public async Task UploadFileAsync(string localPath,
         string remotePath,
         IProgress<double>? progress,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool resume = false)
     {
         if (_sftpClient is not { IsConnected: true })
             throw new InvalidOperationException("Not connected");
 
         await Task.Run(() =>
         {
-            using var fileStream = File.OpenRead(localPath);
-            var length = fileStream.Length;
+            var localInfo = new FileInfo(localPath);
+            var totalLength = localInfo.Length;
+            long offset = 0;
 
-            using var ctr =
-                cancellationToken.Register(
-                    static state => ((Stream)state!).Dispose(),
-                    fileStream);
-
-            try
+            if (resume && _sftpClient.Exists(remotePath))
             {
-                _sftpClient.UploadFile(fileStream, remotePath, (uploaded) =>
+                try
                 {
-                    progress?.Report((double)uploaded / length * 100);
-                });
+                    var existing = _sftpClient.GetAttributes(remotePath);
+                    if (!existing.IsDirectory)
+                    {
+                        var existingSize = (long)existing.Size;
+                        if (existingSize == totalLength)
+                        {
+                            progress?.Report(100);
+                            return;
+                        }
+
+                        offset = existingSize > totalLength ? 0 : existingSize;
+                    }
+                }
+                catch
+                {
+                    offset = 0;
+                }
             }
-            catch (Exception) when (cancellationToken.IsCancellationRequested)
+
+            if (totalLength == 0)
             {
-                throw new OperationCanceledException();
+                using var emptyTarget = _sftpClient.Open(remotePath, FileMode.Create, FileAccess.Write);
+                progress?.Report(100);
+                return;
+            }
+
+            using var sourceStream = File.Open(localPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            sourceStream.Seek(offset, SeekOrigin.Begin);
+
+            Stream targetStream;
+            if (offset > 0)
+            {
+                try
+                {
+                    targetStream = _sftpClient.Open(remotePath, FileMode.OpenOrCreate, FileAccess.Write);
+                    targetStream.Seek(offset, SeekOrigin.Begin);
+                }
+                catch
+                {
+                    targetStream = _sftpClient.Open(remotePath, FileMode.Create, FileAccess.Write);
+                    offset = 0;
+                    sourceStream.Seek(0, SeekOrigin.Begin);
+                }
+            }
+            else
+            {
+                targetStream = _sftpClient.Open(remotePath, FileMode.Create, FileAccess.Write);
+            }
+
+            using (targetStream)
+            {
+                var streams = (Source: (Stream)sourceStream, Target: targetStream);
+                using var ctr =
+                    cancellationToken.Register(
+                        static state =>
+                        {
+                            var pair = ((ValueTuple<Stream, Stream>)state!);
+                            pair.Item1.Dispose();
+                            pair.Item2.Dispose();
+                        },
+                        streams);
+
+                try
+                {
+                    var buffer = new byte[64 * 1024];
+                    long uploaded = offset;
+                    int read;
+                    while ((read = sourceStream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        targetStream.Write(buffer, 0, read);
+                        uploaded += read;
+                        progress?.Report(uploaded * 100.0 / totalLength);
+                    }
+
+                    targetStream.Flush();
+                }
+                catch (Exception) when (cancellationToken.IsCancellationRequested)
+                {
+                    TryDeleteRemoteFile(remotePath);
+                    throw new OperationCanceledException();
+                }
             }
         }, cancellationToken);
     }
@@ -175,26 +250,90 @@ public class SftpService : ISftpService
     public async Task DownloadFileAsync(string remotePath,
         string localPath,
         IProgress<double>? progress,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool resume = false)
     {
         if (_sftpClient is null || !_sftpClient.IsConnected)
             throw new InvalidOperationException("Not connected");
 
         await Task.Run(() =>
         {
-            using var fileStream = File.Create(localPath);
             var attributes = _sftpClient.GetAttributes(remotePath);
-            var fileSize = attributes.Size;
+            var totalSize = (long)attributes.Size;
+            long offset = 0;
 
+            if (resume && File.Exists(localPath))
+            {
+                try
+                {
+                    var localSize = new FileInfo(localPath).Length;
+                    if (localSize == totalSize)
+                    {
+                        progress?.Report(100);
+                        return;
+                    }
+
+                    if (localSize > totalSize)
+                    {
+                        offset = 0;
+                    }
+                    else if (localSize > 0 && localSize < totalSize)
+                        offset = localSize;
+                }
+                catch
+                {
+                    offset = 0;
+                }
+            }
+
+            if (totalSize == 0)
+            {
+                using var emptyFile = File.Create(localPath);
+                progress?.Report(100);
+                return;
+            }
+
+            using var sourceStream = _sftpClient.OpenRead(remotePath);
+            if (offset > 0)
+            {
+                try
+                {
+                    sourceStream.Seek(offset, SeekOrigin.Begin);
+                }
+                catch
+                {
+                    offset = 0;
+                }
+            }
+
+            var mode = offset > 0 ? FileMode.Append : FileMode.Create;
+            using var targetStream = new FileStream(localPath, mode, FileAccess.Write, FileShare.None);
+
+            var streams = (Source: (Stream)sourceStream, Target: (Stream)targetStream);
             using var ctr =
                 cancellationToken.Register(
-                    static state => ((Stream)state!).Dispose(),
-                    fileStream);
+                    static state =>
+                    {
+                        var pair = ((ValueTuple<Stream, Stream>)state!);
+                        pair.Item1.Dispose();
+                        pair.Item2.Dispose();
+                    },
+                    streams);
 
             try
             {
-                _sftpClient.DownloadFile(remotePath, fileStream,
-                    (downloaded) => { progress?.Report((double)downloaded / fileSize * 100); });
+                var buffer = new byte[64 * 1024];
+                long downloaded = offset;
+                int read;
+                while ((read = sourceStream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    targetStream.Write(buffer, 0, read);
+                    downloaded += read;
+                    progress?.Report(downloaded * 100.0 / Math.Max(totalSize, 1));
+                }
+
+                targetStream.Flush();
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
@@ -351,6 +490,22 @@ public class SftpService : ISftpService
                 using var destStream = _sftpClient.Create(targetPath);
                 sourceStream.CopyTo(destStream);
             }
+        }
+    }
+
+    private void TryDeleteRemoteFile(string remotePath)
+    {
+        try
+        {
+            if (_sftpClient is not { IsConnected: true })
+                return;
+
+            if (_sftpClient.Exists(remotePath))
+                _sftpClient.DeleteFile(remotePath);
+        }
+        catch
+        {
+            // Best-effort cleanup for canceled uploads; ignore secondary failures.
         }
     }
 

@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.VisualTree;
 using NoBSSftp.Models;
 using NoBSSftp.ViewModels;
@@ -30,6 +31,60 @@ public partial class MainWindow : Window
         AddHandler(PointerPressedEvent, OnServerItemPointerPressed, RoutingStrategies.Tunnel);
         AddHandler(PointerMovedEvent, OnServerItemPointerMoved, RoutingStrategies.Tunnel);
         AddHandler(PointerReleasedEvent, OnServerItemPointerReleased, RoutingStrategies.Tunnel);
+    }
+
+    private async void OnAboutMenuItemClick(object? sender,
+        EventArgs e)
+    {
+        var version = DataContext is MainWindowViewModel vm ? vm.AppVersion : "unknown";
+
+        var window =
+            new Window
+            {
+                Title = "About NoBSSftp",
+                Width = 420,
+                MinWidth = 420,
+                SizeToContent = SizeToContent.Height,
+                CanResize = false,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                SystemDecorations = SystemDecorations.BorderOnly
+            };
+
+        var stack = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
+        stack.Children.Add(new TextBlock { Text = $"NoBSSftp v{version}", FontWeight = Avalonia.Media.FontWeight.Bold });
+        stack.Children.Add(
+            new TextBlock
+            {
+                Text = "No-BS SFTP client focused on secure transfer workflows.",
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            });
+        stack.Children.Add(new TextBlock { Text = "Author: Beka Pukhashvili" });
+        stack.Children.Add(new TextBlock { Text = "License: MIT" });
+
+        var closeButton =
+            new Button
+            {
+                Content = "Close",
+                HorizontalAlignment = HorizontalAlignment.Right,
+                IsDefault = true
+            };
+        closeButton.Click += (_, _) => window.Close();
+        stack.Children.Add(closeButton);
+        window.Content = stack;
+
+        await window.ShowDialog(this);
+    }
+
+    private void OnShowTransferQueueMenuItemClick(object? sender,
+        EventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm)
+            return;
+
+        vm.ShowTransferQueue = !vm.ShowTransferQueue;
+
+        if (sender is NativeMenuItem item)
+            item.IsChecked = vm.ShowTransferQueue;
     }
 
     private void OnServerListDoubleTapped(object? sender,

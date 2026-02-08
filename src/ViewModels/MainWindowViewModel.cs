@@ -18,7 +18,8 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IProfileManager _profileManager;
     private readonly IDialogService _dialogService;
     private readonly IUserVerificationService _userVerificationService;
-    public string AppTitle { get; } = $"NoBSSftp v{ResolveAppVersion()}";
+    public string AppVersion { get; } = ResolveAppVersion();
+    public string AppTitle => $"NoBSSftp v{AppVersion}";
 
     public ObservableCollection<object> TabItems { get; } = [];
     public ObservableCollection<ServerProfile> RootServers { get; } = [];
@@ -31,6 +32,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _isSidebarOpen = true;
+
+    [ObservableProperty]
+    private bool _showTransferQueue = true;
 
     public MainWindowViewModel()
     {
@@ -406,9 +410,16 @@ public partial class MainWindowViewModel : ViewModelBase
             ? new SessionViewModel()
             : new SessionViewModel(profile);
 
+        tab.ShowTransferQueue = ShowTransferQueue;
         tab.CloseRequested += OnTabCloseRequested;
         tab.SetConnectionSuggestions(BuildConnectionSuggestions());
         return tab;
+    }
+
+    partial void OnShowTransferQueueChanged(bool value)
+    {
+        foreach (var tab in TabItems.OfType<SessionViewModel>())
+            tab.ShowTransferQueue = value;
     }
 
     private IReadOnlyList<ServerProfile> BuildConnectionSuggestions()

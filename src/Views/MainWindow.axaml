@@ -11,6 +11,27 @@
         Icon="/Assets/icon.ico"
         Title="{Binding AppTitle}">
 
+    <NativeMenu.Menu>
+        <NativeMenu>
+            <NativeMenuItem Header="View">
+                <NativeMenu>
+                    <NativeMenuItem Header="Show Transfer Queue"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding ShowTransferQueue, Mode=TwoWay}"
+                                    Click="OnShowTransferQueueMenuItemClick"
+                                    IsEnabled="True"/>
+                    <NativeMenuItemSeparator />
+                </NativeMenu>
+            </NativeMenuItem>
+            <NativeMenuItem Header="Help">
+                <NativeMenu>
+                    <NativeMenuItem Header="About NoBSSftp"
+                                    Click="OnAboutMenuItemClick"/>
+                </NativeMenu>
+            </NativeMenuItem>
+        </NativeMenu>
+    </NativeMenu.Menu>
+
     <Window.Styles>
         <Style Selector="Button.Flat">
             <Setter Property="Background" Value="Transparent"/>

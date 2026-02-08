@@ -33,7 +33,7 @@
         <CFBundleName>NoBSSftp</CFBundleName>
         <CFBundleDisplayName>NoBSSftp</CFBundleDisplayName>
         <CFBundleIdentifier>com.nobs.sftp</CFBundleIdentifier>
-        <Version>0.8.1</Version>
+        <Version>0.9.0</Version>
         <CFBundleIconFile>NoBSSftp.icns</CFBundleIconFile>
     </PropertyGroup>
 

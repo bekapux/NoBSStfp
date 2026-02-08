@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -14,11 +16,16 @@ namespace NoBSSftp.ViewModels;
 
 public partial class SessionViewModel : ViewModelBase
 {
+    private const int TransferRetryAttempts = 3;
+
     private readonly ISftpService _sftpService;
     private readonly IDialogService _dialogService;
     private readonly IProfileManager _profileManager;
     private readonly IUserVerificationService _userVerificationService;
     private CancellationTokenSource? _transferCts;
+    private readonly Queue<QueuedTransfer> _transferQueue = new();
+    private readonly Dictionary<Guid, Func<TransferWorkDefinition>> _retryFactories = new();
+    private bool _isProcessingTransferQueue;
     private DateTime _lastExternalTerminalLaunchUtc = DateTime.MinValue;
     private DateTime _lastSuggestionConnectUtc = DateTime.MinValue;
 
@@ -60,7 +67,13 @@ public partial class SessionViewModel : ViewModelBase
     private bool _showHiddenFiles;
 
     [ObservableProperty]
+    private bool _showTransferQueue = true;
+
+    [ObservableProperty]
     private int _connectFailureFocusRequestId;
+
+    [ObservableProperty]
+    private TransferJob? _selectedTransferJob;
 
     private class ClipboardItem
     {
@@ -69,6 +82,92 @@ public partial class SessionViewModel : ViewModelBase
         public bool IsDirectory { get; init; }
         public long Size { get; init; }
         public DateTime LastWriteTime { get; init; }
+    }
+
+    private sealed class UploadItem
+    {
+        public string LocalPath { get; init; } = string.Empty;
+        public string RemotePath { get; set; } = string.Empty;
+        public string DisplayName { get; init; } = string.Empty;
+        public long Size { get; init; }
+    }
+
+    private sealed class UploadSourceTarget
+    {
+        public string LocalPath { get; init; } = string.Empty;
+        public string RemoteRootPath { get; init; } = string.Empty;
+        public bool IsDirectory { get; init; }
+        public string DisplayRootName { get; init; } = string.Empty;
+    }
+
+    private sealed class UploadPlan
+    {
+        public List<string> Directories { get; } = [];
+        public List<UploadItem> Files { get; } = [];
+    }
+
+    private sealed class DownloadFilePlanItem
+    {
+        public string RemotePath { get; init; } = string.Empty;
+        public string LocalPath { get; init; } = string.Empty;
+        public string DisplayName { get; init; } = string.Empty;
+        public long Size { get; init; }
+    }
+
+    private sealed class DownloadPlan
+    {
+        public List<string> Directories { get; } = [];
+        public List<DownloadFilePlanItem> Files { get; } = [];
+    }
+
+    private sealed class DeletePlanItem
+    {
+        public string RemotePath { get; init; } = string.Empty;
+        public string DisplayName { get; init; } = string.Empty;
+        public bool IsDirectory { get; init; }
+    }
+
+    private sealed class DeleteTargetSnapshot
+    {
+        public string Name { get; init; } = string.Empty;
+        public bool IsDirectory { get; init; }
+    }
+
+    private sealed class DeleteJobRequest
+    {
+        public string BaseRemotePath { get; init; } = "/";
+        public IReadOnlyList<DeleteTargetSnapshot> Targets { get; init; } = [];
+    }
+
+    private sealed class UploadJobRequest
+    {
+        public string DestinationPath { get; init; } = "/";
+        public IReadOnlyList<string> LocalPaths { get; init; } = [];
+    }
+
+    private sealed class DownloadJobRequest
+    {
+        public string Name { get; init; } = string.Empty;
+        public bool IsDirectory { get; init; }
+        public long Size { get; init; }
+        public DateTime LastWriteTime { get; init; }
+        public string RemotePath { get; init; } = "/";
+        public string LocalFolder { get; init; } = string.Empty;
+        public string? ResolvedLocalRootPath { get; set; }
+    }
+
+    private sealed class TransferWorkDefinition
+    {
+        public TransferJobType Type { get; init; }
+        public string Title { get; init; } = string.Empty;
+        public Func<TransferJob, CancellationToken, Task> ExecuteAsync { get; init; } = (_, _) => Task.CompletedTask;
+        public Func<TransferWorkDefinition>? RetryFactory { get; init; }
+    }
+
+    private sealed class QueuedTransfer
+    {
+        public TransferJob Job { get; init; } = null!;
+        public TransferWorkDefinition Definition { get; init; } = null!;
     }
 
     private List<ClipboardItem> _clipboardItems = new();
@@ -82,6 +181,25 @@ public partial class SessionViewModel : ViewModelBase
     public event Action<SessionViewModel>? CloseRequested;
 
     public ObservableCollection<FileEntry> Files { get; } = [];
+    public ObservableCollection<TransferJob> TransferJobs { get; } = [];
+
+    public bool HasTransferJobs => TransferJobs.Count > 0;
+
+    public bool HasRetryableTransfers => TransferJobs.Any(job => job.IsRetryable);
+
+    public bool IsTransferQueueVisible => ShowTransferQueue;
+
+    public string TransferQueueSummary
+    {
+        get
+        {
+            var pending = TransferJobs.Count(job => job.State == TransferJobState.Pending);
+            var running = TransferJobs.Count(job => job.State == TransferJobState.Running);
+            var failed = TransferJobs.Count(job => job.State == TransferJobState.Failed);
+            var completed = TransferJobs.Count(job => job.State == TransferJobState.Completed);
+            return $"Queue: {pending} pending, {running} running, {failed} failed, {completed} completed";
+        }
+    }
 
     [ObservableProperty]
     private ServerProfile? _suggestedServerPrimary;
@@ -109,7 +227,176 @@ public partial class SessionViewModel : ViewModelBase
         _profileManager = new ProfileManager();
         _userVerificationService = new UserVerificationService();
         _profile = profile;
+        TransferJobs.CollectionChanged += OnTransferJobsCollectionChanged;
         Header = GetDisplayName();
+    }
+
+    partial void OnSelectedTransferJobChanged(TransferJob? value)
+    {
+        RetryTransferCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnTransferJobsCollectionChanged(object? sender,
+        NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (var item in e.OldItems.OfType<TransferJob>())
+                item.PropertyChanged -= OnTransferJobPropertyChanged;
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (var item in e.NewItems.OfType<TransferJob>())
+                item.PropertyChanged += OnTransferJobPropertyChanged;
+        }
+
+        NotifyTransferQueueChanged();
+    }
+
+    private void OnTransferJobPropertyChanged(object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(TransferJob.State) or nameof(TransferJob.IsRetryable))
+            NotifyTransferQueueChanged();
+    }
+
+    private void NotifyTransferQueueChanged()
+    {
+        OnPropertyChanged(nameof(HasTransferJobs));
+        OnPropertyChanged(nameof(HasRetryableTransfers));
+        OnPropertyChanged(nameof(IsTransferQueueVisible));
+        OnPropertyChanged(nameof(TransferQueueSummary));
+        RetryTransferCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnShowTransferQueueChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsTransferQueueVisible));
+    }
+
+    private bool CanRetryTransfer(TransferJob? job)
+    {
+        var candidate = job ?? SelectedTransferJob;
+        return candidate is not null &&
+               candidate.IsRetryable &&
+               _retryFactories.ContainsKey(candidate.Id);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRetryTransfer))]
+    private void RetryTransfer(TransferJob? job)
+    {
+        var candidate = job ?? SelectedTransferJob;
+        if (candidate is null)
+            return;
+
+        if (!_retryFactories.TryGetValue(candidate.Id, out var retryFactory))
+            return;
+
+        EnqueueTransfer(retryFactory());
+    }
+
+    private void EnqueueTransfer(TransferWorkDefinition definition)
+    {
+        var job = new TransferJob(definition.Type, definition.Title);
+        TransferJobs.Add(job);
+
+        _transferQueue.Enqueue(
+            new QueuedTransfer
+            {
+                Job = job,
+                Definition = definition
+            });
+
+        StatusMessage = $"Queued: {definition.Title}";
+        NotifyTransferQueueChanged();
+        _ = ProcessTransferQueueAsync();
+    }
+
+    private async Task ProcessTransferQueueAsync()
+    {
+        if (_isProcessingTransferQueue)
+            return;
+
+        _isProcessingTransferQueue = true;
+        try
+        {
+            while (_transferQueue.Count > 0)
+            {
+                var queued = _transferQueue.Dequeue();
+                await ExecuteQueuedTransferAsync(queued);
+            }
+        }
+        finally
+        {
+            _isProcessingTransferQueue = false;
+        }
+    }
+
+    private async Task ExecuteQueuedTransferAsync(QueuedTransfer queued)
+    {
+        var job = queued.Job;
+        _transferCts = new CancellationTokenSource();
+        IsTransferring = true;
+        TransferProgress = 0;
+        TransferTitle = job.Title;
+        job.State = TransferJobState.Running;
+        job.Status = "Starting...";
+        job.Progress = 0;
+        job.ErrorMessage = string.Empty;
+        job.IsRetryable = false;
+        _retryFactories.Remove(job.Id);
+        NotifyTransferQueueChanged();
+
+        try
+        {
+            await queued.Definition.ExecuteAsync(job, _transferCts.Token);
+            job.State = TransferJobState.Completed;
+            job.Progress = 100;
+            if (string.IsNullOrWhiteSpace(job.Status))
+                job.Status = "Completed";
+            job.IsRetryable = false;
+            _retryFactories.Remove(job.Id);
+            TransferTitle = $"{job.Title} complete";
+        }
+        catch (OperationCanceledException)
+        {
+            job.State = TransferJobState.Cancelled;
+            job.Status = "Cancelled";
+            job.IsRetryable = false;
+            _retryFactories.Remove(job.Id);
+            TransferTitle = $"{job.Title} cancelled";
+            StatusMessage = $"{job.Title} cancelled";
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Error($"{job.JobType} transfer failed", ex);
+            job.State = TransferJobState.Failed;
+            job.ErrorMessage = ex.Message;
+            job.Status = $"Failed: {ex.Message}";
+
+            var retryFactory = queued.Definition.RetryFactory;
+            if (retryFactory is not null)
+            {
+                _retryFactories[job.Id] = retryFactory;
+                job.IsRetryable = true;
+            }
+            else
+            {
+                job.IsRetryable = false;
+                _retryFactories.Remove(job.Id);
+            }
+
+            TransferTitle = $"{job.Title} failed";
+            StatusMessage = $"{job.Title} failed: {ex.Message}";
+        }
+        finally
+        {
+            IsTransferring = false;
+            _transferCts.Dispose();
+            _transferCts = null;
+            NotifyTransferQueueChanged();
+        }
     }
 
     public void SetConnectionSuggestions(IEnumerable<ServerProfile> suggestions)
@@ -522,7 +809,10 @@ public partial class SessionViewModel : ViewModelBase
     private async Task Delete(FileEntry? file)
     {
         if (!IsConnected) return;
-        var targets = GetSelectedTargets(file);
+        var rawTargets = GetSelectedTargets(file);
+        if (rawTargets.Count is 0) return;
+        var basePath = CurrentPath;
+        var targets = FilterDeleteTargets(rawTargets, basePath);
         if (targets.Count is 0) return;
 
         var confirm =
@@ -532,29 +822,20 @@ public partial class SessionViewModel : ViewModelBase
                     $"Are you sure you want to delete {targets.Count} items?");
         if (!confirm) return;
 
-        try
-        {
-            foreach (var target in targets)
+        var request =
+            new DeleteJobRequest
             {
-                var path = CurrentPath.EndsWith('/') ? CurrentPath + target.Name : $"{CurrentPath}/{target.Name}";
-                if (target.IsDirectory)
-                {
-                    await _sftpService.DeleteDirectoryAsync(path);
-                }
-                else
-                {
-                    await _sftpService.DeleteFileAsync(path);
-                }
-            }
+                BaseRemotePath = basePath,
+                Targets =
+                    targets.Select(t =>
+                        new DeleteTargetSnapshot
+                        {
+                            Name = t.Name,
+                            IsDirectory = t.IsDirectory
+                        }).ToList()
+            };
 
-            await RefreshFileList();
-            StatusMessage = targets.Count == 1 ? $"Deleted: {targets[0].Name}" : $"Deleted {targets.Count} items";
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Error("Delete failed", ex);
-            StatusMessage = $"Delete Error: {ex.Message}";
-        }
+        EnqueueTransfer(CreateDeleteTransferDefinition(request));
     }
 
     [RelayCommand]
@@ -576,6 +857,609 @@ public partial class SessionViewModel : ViewModelBase
         _clipboardIsCut = false;
         LoggingService.Info($"Copy set: {_clipboardItems.Count} item(s)");
         StatusMessage = _clipboardItems.Count == 1 ? $"Copied: {targets[0].Name}" : $"Copied {targets.Count} items";
+    }
+
+    private List<FileEntry> FilterDeleteTargets(IReadOnlyList<FileEntry> targets,
+        string basePath)
+    {
+        if (targets.Count <= 1)
+            return targets.ToList();
+
+        var uniqueTargetsByPath = new Dictionary<string, FileEntry>(StringComparer.Ordinal);
+        foreach (var target in targets)
+        {
+            var targetPath = NormalizeRemoteAbsolutePath(CombineRemotePath(basePath, target.Name));
+            if (!uniqueTargetsByPath.ContainsKey(targetPath))
+                uniqueTargetsByPath[targetPath] = target;
+        }
+
+        var directoryRoots = uniqueTargetsByPath
+            .Where(kvp => kvp.Value.IsDirectory)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        var filtered = new List<FileEntry>();
+        foreach (var (path, target) in uniqueTargetsByPath)
+        {
+            var isNestedUnderSelectedDirectory =
+                directoryRoots.Any(root =>
+                    !path.Equals(root, StringComparison.Ordinal) &&
+                    path.StartsWith(root + "/", StringComparison.Ordinal));
+
+            if (!isNestedUnderSelectedDirectory)
+                filtered.Add(target);
+        }
+
+        return filtered;
+    }
+
+    private async Task<List<DeletePlanItem>> BuildDeletePlanAsync(IReadOnlyList<DeleteTargetSnapshot> targets,
+        string basePath,
+        CancellationToken cancellationToken)
+    {
+        var plan = new List<DeletePlanItem>();
+
+        foreach (var target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var targetPath = NormalizeRemoteAbsolutePath(CombineRemotePath(basePath, target.Name));
+            if (target.IsDirectory)
+                await AppendDirectoryDeletePlanAsync(targetPath, basePath, plan, cancellationToken);
+            else
+                plan.Add(
+                    new DeletePlanItem
+                    {
+                        RemotePath = targetPath,
+                        DisplayName = BuildDeleteDisplayName(targetPath, basePath),
+                        IsDirectory = false
+                    });
+        }
+
+        return plan;
+    }
+
+    private async Task AppendDirectoryDeletePlanAsync(string directoryPath,
+        string basePath,
+        ICollection<DeletePlanItem> plan,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var entries = await _sftpService.ListDirectoryAsync(directoryPath);
+
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entryPath = NormalizeRemoteAbsolutePath(CombineRemotePath(directoryPath, entry.Name));
+            if (entry.IsDirectory)
+            {
+                await AppendDirectoryDeletePlanAsync(entryPath, basePath, plan, cancellationToken);
+            }
+            else
+            {
+                plan.Add(
+                    new DeletePlanItem
+                    {
+                        RemotePath = entryPath,
+                        DisplayName = BuildDeleteDisplayName(entryPath, basePath),
+                        IsDirectory = false
+                    });
+            }
+        }
+
+        plan.Add(
+            new DeletePlanItem
+            {
+                RemotePath = directoryPath,
+                DisplayName = $"{BuildDeleteDisplayName(directoryPath, basePath)}/",
+                IsDirectory = true
+            });
+    }
+
+    private static string BuildDeleteDisplayName(string remotePath,
+        string basePath)
+    {
+        var normalizedCurrentPath = NormalizeRemoteAbsolutePath(basePath);
+        var normalizedRemotePath = NormalizeRemoteAbsolutePath(remotePath);
+
+        if (normalizedCurrentPath == "/")
+            return normalizedRemotePath.TrimStart('/');
+
+        var prefix = normalizedCurrentPath + "/";
+        if (normalizedRemotePath.StartsWith(prefix, StringComparison.Ordinal))
+            return normalizedRemotePath[prefix.Length..];
+
+        return normalizedRemotePath;
+    }
+
+    private static DeleteJobRequest CloneDeleteJobRequest(DeleteJobRequest request)
+    {
+        return new DeleteJobRequest
+        {
+            BaseRemotePath = request.BaseRemotePath,
+            Targets =
+                request.Targets
+                    .Select(t =>
+                        new DeleteTargetSnapshot
+                        {
+                            Name = t.Name,
+                            IsDirectory = t.IsDirectory
+                        })
+                    .ToList()
+        };
+    }
+
+    private static UploadJobRequest CloneUploadJobRequest(UploadJobRequest request)
+    {
+        return new UploadJobRequest
+        {
+            DestinationPath = request.DestinationPath,
+            LocalPaths = request.LocalPaths.ToList()
+        };
+    }
+
+    private static DownloadJobRequest CloneDownloadJobRequest(DownloadJobRequest request)
+    {
+        return new DownloadJobRequest
+        {
+            Name = request.Name,
+            IsDirectory = request.IsDirectory,
+            Size = request.Size,
+            LastWriteTime = request.LastWriteTime,
+            RemotePath = request.RemotePath,
+            LocalFolder = request.LocalFolder,
+            ResolvedLocalRootPath = request.ResolvedLocalRootPath
+        };
+    }
+
+    private TransferWorkDefinition CreateDeleteTransferDefinition(DeleteJobRequest request)
+    {
+        var snapshot = CloneDeleteJobRequest(request);
+        var title =
+            snapshot.Targets.Count == 1
+                ? $"Delete {snapshot.Targets[0].Name}"
+                : $"Delete {snapshot.Targets.Count} items";
+
+        return new TransferWorkDefinition
+        {
+            Type = TransferJobType.Delete,
+            Title = title,
+            ExecuteAsync = (job, token) => ExecuteDeleteJobAsync(job, snapshot, token),
+            RetryFactory = () => CreateDeleteTransferDefinition(CloneDeleteJobRequest(snapshot))
+        };
+    }
+
+    private TransferWorkDefinition CreateUploadTransferDefinition(UploadJobRequest request)
+    {
+        var snapshot = CloneUploadJobRequest(request);
+        var title =
+            snapshot.LocalPaths.Count == 1
+                ? $"Upload {Path.GetFileName(snapshot.LocalPaths[0])}"
+                : $"Upload {snapshot.LocalPaths.Count} items";
+
+        return new TransferWorkDefinition
+        {
+            Type = TransferJobType.Upload,
+            Title = title,
+            ExecuteAsync = (job, token) => ExecuteUploadJobAsync(job, snapshot, token),
+            RetryFactory = () => CreateUploadTransferDefinition(CloneUploadJobRequest(snapshot))
+        };
+    }
+
+    private TransferWorkDefinition CreateDownloadTransferDefinition(DownloadJobRequest request)
+    {
+        var snapshot = CloneDownloadJobRequest(request);
+        var title = $"Download {snapshot.Name}";
+
+        return new TransferWorkDefinition
+        {
+            Type = TransferJobType.Download,
+            Title = title,
+            ExecuteAsync = (job, token) => ExecuteDownloadJobAsync(job, snapshot, token),
+            RetryFactory = () => CreateDownloadTransferDefinition(CloneDownloadJobRequest(snapshot))
+        };
+    }
+
+    private void UpdateTransferUi(TransferJob job,
+        string title,
+        string status,
+        double? progress = null)
+    {
+        TransferTitle = title;
+        StatusMessage = status;
+        job.Status = status;
+
+        if (!progress.HasValue)
+            return;
+
+        var clamped = Math.Clamp(progress.Value, 0, 100);
+        TransferProgress = clamped;
+        job.Progress = clamped;
+    }
+
+    private async Task TryRefreshFileListAfterTransferAsync(string operation)
+    {
+        if (!IsConnected)
+            return;
+
+        try
+        {
+            await RefreshFileList();
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Warn($"Could not refresh file list after {operation}: {ex.Message}");
+        }
+    }
+
+    private async Task ExecuteDeleteJobAsync(TransferJob job,
+        DeleteJobRequest request,
+        CancellationToken cancellationToken)
+    {
+        var shouldRefresh = false;
+        try
+        {
+            UpdateTransferUi(job, "Preparing delete plan...", "Preparing delete plan...", 0);
+            var deletePlan = await BuildDeletePlanAsync(request.Targets, request.BaseRemotePath, cancellationToken);
+            if (deletePlan.Count == 0)
+            {
+                UpdateTransferUi(job, "Nothing to delete", "Nothing to delete", 100);
+                return;
+            }
+
+            shouldRefresh = true;
+            var totalSteps = deletePlan.Count;
+            var completedSteps = 0;
+
+            foreach (var step in deletePlan)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var stepNumber = completedSteps + 1;
+                var title = $"Deleting {stepNumber}/{totalSteps}: {step.DisplayName}";
+                UpdateTransferUi(job, title, title, completedSteps * 100.0 / totalSteps);
+
+                if (step.IsDirectory)
+                    await _sftpService.DeleteDirectoryAsync(step.RemotePath);
+                else
+                    await _sftpService.DeleteFileAsync(step.RemotePath);
+
+                completedSteps++;
+                UpdateTransferUi(job, title, title, completedSteps * 100.0 / totalSteps);
+            }
+
+            var doneText =
+                request.Targets.Count == 1
+                    ? $"Deleted: {request.Targets[0].Name}"
+                    : $"Deleted {request.Targets.Count} items";
+            UpdateTransferUi(job, doneText, doneText, 100);
+        }
+        finally
+        {
+            if (shouldRefresh)
+                await TryRefreshFileListAfterTransferAsync("delete");
+        }
+    }
+
+    private async Task ExecuteDownloadJobAsync(TransferJob job,
+        DownloadJobRequest request,
+        CancellationToken cancellationToken)
+    {
+        var shouldCleanupCurrentPartialFile = false;
+        string? currentLocalPath = null;
+
+        try
+        {
+            UpdateTransferUi(job, $"Preparing download: {request.Name}", $"Preparing download: {request.Name}", 0);
+
+            var sourceInfo = (request.IsDirectory, request.Size, request.LastWriteTime);
+            string resolvedLocalRoot;
+            if (!string.IsNullOrWhiteSpace(request.ResolvedLocalRootPath))
+            {
+                resolvedLocalRoot = request.ResolvedLocalRootPath;
+            }
+            else
+            {
+                var localRootPath = Path.Combine(request.LocalFolder, request.Name);
+                var resolved = await ResolveLocalConflictAsync(request.Name, sourceInfo, localRootPath);
+                if (resolved is null)
+                    throw new OperationCanceledException();
+
+                request.ResolvedLocalRootPath = resolved;
+                resolvedLocalRoot = resolved;
+            }
+
+            var rootEntry =
+                new FileEntry
+                {
+                    Name = request.Name,
+                    IsDirectory = request.IsDirectory,
+                    Size = request.Size,
+                    LastWriteTime = request.LastWriteTime
+                };
+
+            var plan = await BuildDownloadPlanAsync(rootEntry, request.RemotePath, resolvedLocalRoot, cancellationToken);
+            if (plan.Files.Count == 0 && plan.Directories.Count == 0)
+            {
+                UpdateTransferUi(job, "Nothing to download", "Nothing to download", 100);
+                return;
+            }
+
+            foreach (var directory in plan.Directories.OrderBy(GetLocalPathDepth))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Directory.CreateDirectory(directory);
+            }
+
+            var totalFiles = plan.Files.Count;
+            var totalBytes = plan.Files.Sum(item => Math.Max(0, item.Size));
+            long downloadedBytesBeforeCurrent = 0;
+            var downloadedFiles = 0;
+
+            foreach (var item in plan.Files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var fileSize = Math.Max(0, item.Size);
+                var fileNumber = downloadedFiles + 1;
+                var title = $"Downloading {fileNumber}/{totalFiles}: {item.DisplayName}";
+                UpdateTransferUi(job, title, title);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(item.LocalPath)!);
+                currentLocalPath = item.LocalPath;
+                shouldCleanupCurrentPartialFile = true;
+
+                var progress =
+                    new Progress<double>(p =>
+                    {
+                        var filePercent = Math.Clamp(p, 0, 100);
+                        double overallPercent;
+
+                        if (totalBytes > 0)
+                        {
+                            var downloadedInCurrentFile = (long)Math.Round(fileSize * filePercent / 100.0);
+                            overallPercent =
+                                (downloadedBytesBeforeCurrent + downloadedInCurrentFile) * 100.0 / totalBytes;
+                        }
+                        else
+                        {
+                            overallPercent = (downloadedFiles + filePercent / 100.0) * 100.0 / Math.Max(totalFiles, 1);
+                        }
+
+                        UpdateTransferUi(
+                            job,
+                            title,
+                            $"Downloading {item.DisplayName}: {filePercent:F0}% ({overallPercent:F0}% total)",
+                            overallPercent);
+                    });
+
+                await DownloadFileWithRetriesAsync(job, item, progress, cancellationToken);
+
+                shouldCleanupCurrentPartialFile = false;
+                currentLocalPath = null;
+                downloadedBytesBeforeCurrent += fileSize;
+                downloadedFiles++;
+
+                var progressValue =
+                    totalBytes > 0
+                        ? downloadedBytesBeforeCurrent * 100.0 / totalBytes
+                        : downloadedFiles * 100.0 / Math.Max(totalFiles, 1);
+                UpdateTransferUi(job, title, job.Status, progressValue);
+            }
+
+            var doneText =
+                request.IsDirectory
+                    ? $"Download complete ({downloadedFiles} file{(downloadedFiles == 1 ? "" : "s")})"
+                    : $"Downloaded: {Path.GetFileName(resolvedLocalRoot)}";
+            UpdateTransferUi(job, doneText, doneText, 100);
+        }
+        catch (OperationCanceledException)
+        {
+            if (shouldCleanupCurrentPartialFile && !string.IsNullOrWhiteSpace(currentLocalPath))
+                TryDeleteLocalPath(currentLocalPath);
+            throw;
+        }
+    }
+
+    private async Task ExecuteUploadJobAsync(TransferJob job,
+        UploadJobRequest request,
+        CancellationToken cancellationToken)
+    {
+        var shouldRefreshFileList = false;
+        try
+        {
+            UpdateTransferUi(job, "Checking upload paths", "Resolving upload sources...", 0);
+
+            var sourceTargets =
+                await ResolveUploadTargetsAsync(request.LocalPaths, request.DestinationPath, cancellationToken);
+            if (sourceTargets is null)
+                throw new OperationCanceledException();
+
+            var plan = BuildUploadPlan(sourceTargets, cancellationToken);
+            var totalFiles = plan.Files.Count;
+            var totalDirectories = plan.Directories.Count;
+
+            if (totalFiles == 0 && totalDirectories == 0)
+            {
+                UpdateTransferUi(job, "Nothing to upload", "Nothing to upload", 100);
+                return;
+            }
+
+            shouldRefreshFileList = true;
+
+            UpdateTransferUi(job, "Checking upload conflicts", "Scanning destination...", 0);
+            var shouldContinue = await ResolveUploadFileConflictsAsync(job, plan, cancellationToken);
+            if (!shouldContinue)
+                throw new OperationCanceledException();
+
+            var preparedDirectories = 0;
+            foreach (var remoteDirectory in plan.Directories)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                preparedDirectories++;
+                var title = $"Preparing folder {preparedDirectories}/{totalDirectories}";
+                var status = $"Preparing {remoteDirectory}";
+                UpdateTransferUi(
+                    job,
+                    title,
+                    status,
+                    totalFiles == 0 && totalDirectories > 0 ? (preparedDirectories - 1) * 100.0 / totalDirectories : null);
+
+                var exists = await _sftpService.PathExistsAsync(remoteDirectory);
+                if (!exists)
+                {
+                    await _sftpService.CreateDirectoryAsync(remoteDirectory);
+                }
+                else if (!await _sftpService.IsDirectoryAsync(remoteDirectory))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot create directory '{remoteDirectory}' because a file already exists at that path.");
+                }
+
+                if (totalFiles == 0 && totalDirectories > 0)
+                    UpdateTransferUi(job, title, status, preparedDirectories * 100.0 / totalDirectories);
+            }
+
+            var totalBytes = plan.Files.Sum(f => Math.Max(0, f.Size));
+            long uploadedBytesBeforeCurrent = 0;
+            var uploadedFiles = 0;
+
+            foreach (var item in plan.Files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var fileSize = Math.Max(0, item.Size);
+                var fileNumber = uploadedFiles + 1;
+                var title = $"Uploading {fileNumber}/{totalFiles}: {item.DisplayName}";
+                UpdateTransferUi(job, title, title);
+
+                var progress =
+                    new Progress<double>(p =>
+                    {
+                        var filePercent = Math.Clamp(p, 0, 100);
+                        double overallPercent;
+
+                        if (totalBytes > 0)
+                        {
+                            var uploadedInCurrentFile = (long)Math.Round(fileSize * filePercent / 100.0);
+                            overallPercent = (uploadedBytesBeforeCurrent + uploadedInCurrentFile) * 100.0 / totalBytes;
+                        }
+                        else
+                        {
+                            overallPercent = (uploadedFiles + filePercent / 100.0) * 100.0 / Math.Max(totalFiles, 1);
+                        }
+
+                        UpdateTransferUi(
+                            job,
+                            title,
+                            $"Uploading {item.DisplayName}: {filePercent:F0}% ({overallPercent:F0}% total)",
+                            overallPercent);
+                    });
+
+                await UploadFileWithRetriesAsync(job, item, progress, cancellationToken);
+
+                uploadedBytesBeforeCurrent += fileSize;
+                uploadedFiles++;
+                var overall =
+                    totalBytes > 0
+                        ? uploadedBytesBeforeCurrent * 100.0 / totalBytes
+                        : uploadedFiles * 100.0 / Math.Max(totalFiles, 1);
+                UpdateTransferUi(job, title, job.Status, overall);
+            }
+
+            var doneText =
+                $"Upload complete ({uploadedFiles} file{(uploadedFiles == 1 ? "" : "s")}, {totalDirectories} folder{(totalDirectories == 1 ? "" : "s")})";
+            UpdateTransferUi(job, "Upload complete", doneText, 100);
+        }
+        finally
+        {
+            if (shouldRefreshFileList)
+                await TryRefreshFileListAfterTransferAsync("upload");
+        }
+    }
+
+    private async Task UploadFileWithRetriesAsync(TransferJob job,
+        UploadItem item,
+        IProgress<double> progress,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastException = null;
+        for (var attempt = 1; attempt <= TransferRetryAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                await _sftpService.UploadFileAsync(
+                    item.LocalPath,
+                    item.RemotePath,
+                    progress,
+                    cancellationToken,
+                    resume: true);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (attempt < TransferRetryAttempts)
+            {
+                lastException = ex;
+                var retryStatus =
+                    $"Upload interrupted for {item.DisplayName}. Retrying ({attempt + 1}/{TransferRetryAttempts})...";
+                UpdateTransferUi(job, TransferTitle, retryStatus, TransferProgress);
+                await Task.Delay(TimeSpan.FromSeconds(Math.Min(4, attempt)), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                break;
+            }
+        }
+
+        throw lastException ?? new InvalidOperationException($"Upload failed for {item.DisplayName}.");
+    }
+
+    private async Task DownloadFileWithRetriesAsync(TransferJob job,
+        DownloadFilePlanItem item,
+        IProgress<double> progress,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastException = null;
+        for (var attempt = 1; attempt <= TransferRetryAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                await _sftpService.DownloadFileAsync(
+                    item.RemotePath,
+                    item.LocalPath,
+                    progress,
+                    cancellationToken,
+                    resume: true);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (attempt < TransferRetryAttempts)
+            {
+                lastException = ex;
+                var retryStatus =
+                    $"Download interrupted for {item.DisplayName}. Retrying ({attempt + 1}/{TransferRetryAttempts})...";
+                UpdateTransferUi(job, TransferTitle, retryStatus, TransferProgress);
+                await Task.Delay(TimeSpan.FromSeconds(Math.Min(4, attempt)), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                break;
+            }
+        }
+
+        throw lastException ?? new InvalidOperationException($"Download failed for {item.DisplayName}.");
     }
 
     [RelayCommand]
@@ -724,17 +1608,35 @@ public partial class SessionViewModel : ViewModelBase
 
     private async Task<ConflictChoice> PromptConflictAsync(string name,
         (bool IsDirectory, long Size, DateTime LastWriteTime) sourceInfo,
-        string destPath)
+        string destPath,
+        (bool IsDirectory, long Size, DateTime LastWriteTime)? destinationInfo = null)
     {
-        var destInfo = await _sftpService.GetEntryInfoAsync(destPath);
+        var result = await PromptConflictWithScopeAsync(
+            name,
+            sourceInfo,
+            destPath,
+            allowApplyToAll: false,
+            destinationInfo: destinationInfo);
+        return result.Choice;
+    }
+
+    private async Task<ConflictDialogResult> PromptConflictWithScopeAsync(string name,
+        (bool IsDirectory, long Size, DateTime LastWriteTime) sourceInfo,
+        string destPath,
+        bool allowApplyToAll,
+        (bool IsDirectory, long Size, DateTime LastWriteTime)? destinationInfo = null,
+        string? message = null)
+    {
+        var destInfo = destinationInfo ?? await _sftpService.GetEntryInfoAsync(destPath);
         var sourceDetails = FormatEntryDetails(sourceInfo.IsDirectory, sourceInfo.Size, sourceInfo.LastWriteTime);
         var destDetails = FormatEntryDetails(destInfo.IsDirectory, destInfo.Size, destInfo.LastWriteTime);
 
-        return await _dialogService.ConfirmConflictAsync(
+        return await _dialogService.ConfirmConflictWithScopeAsync(
             "Name conflict",
-            $"'{name}' already exists in the destination. What do you want to do?",
+            message ?? $"'{name}' already exists in the destination. What do you want to do?",
             sourceDetails,
-            destDetails);
+            destDetails,
+            allowApplyToAll);
     }
 
     private async Task<string> GetUniqueDestinationPathAsync(string destinationFolder,
@@ -759,6 +1661,76 @@ public partial class SessionViewModel : ViewModelBase
                 return candidatePath;
 
             index++;
+        }
+    }
+
+    private static string GetUniqueLocalDestinationPath(string destinationFolder,
+        string fileName)
+    {
+        var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+        var ext = Path.GetExtension(fileName);
+        var index = 1;
+
+        while (true)
+        {
+            var candidateName =
+                ext.Length > 0
+                    ? $"{nameWithoutExt} ({index}){ext}"
+                    : $"{nameWithoutExt} ({index})";
+            var candidatePath = Path.Combine(destinationFolder, candidateName);
+
+            if (!File.Exists(candidatePath) && !Directory.Exists(candidatePath))
+                return candidatePath;
+
+            index++;
+        }
+    }
+
+    private static (bool IsDirectory, long Size, DateTime LastWriteTime) GetLocalEntryInfo(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            var dirInfo = new DirectoryInfo(path);
+            return (true, 0, dirInfo.LastWriteTime);
+        }
+
+        if (File.Exists(path))
+        {
+            var fileInfo = new FileInfo(path);
+            return (false, fileInfo.Length, fileInfo.LastWriteTime);
+        }
+
+        return (false, 0, DateTime.MinValue);
+    }
+
+    private static int GetLocalPathDepth(string localPath)
+    {
+        var normalized = Path.GetFullPath(localPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (normalized.Length == 0)
+            return 0;
+
+        return normalized.Count(
+            ch => ch == Path.DirectorySeparatorChar || ch == Path.AltDirectorySeparatorChar);
+    }
+
+    private static void TryDeleteLocalPath(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                return;
+            }
+
+            if (Directory.Exists(path))
+                Directory.Delete(path, true);
+        }
+        catch
+        {
+            // Best-effort cleanup for overwritten/canceled local downloads.
         }
     }
 
@@ -837,100 +1809,551 @@ public partial class SessionViewModel : ViewModelBase
     [RelayCommand]
     private async Task DownloadTo(FileEntry? file)
     {
-        var target = file ?? SelectedFile;
-        if (!IsConnected || target is null || target.IsDirectory || target.Name == "..") return;
+        if (!IsConnected) return;
+
+        var targets = GetSelectedTargets(file);
+        if (targets.Count is 0) return;
+        if (targets.Count > 1)
+        {
+            StatusMessage = "Download supports one target at a time";
+            return;
+        }
+
+        var target = targets[0];
 
         var localFolder = await _dialogService.PickFolderAsync();
         if (string.IsNullOrEmpty(localFolder)) return;
 
-        _transferCts = new CancellationTokenSource();
+        var request =
+            new DownloadJobRequest
+            {
+                Name = target.Name,
+                IsDirectory = target.IsDirectory,
+                Size = target.Size,
+                LastWriteTime = target.LastWriteTime,
+                RemotePath = CombineRemotePath(CurrentPath, target.Name),
+                LocalFolder = localFolder
+            };
 
-        try
+        EnqueueTransfer(CreateDownloadTransferDefinition(request));
+    }
+
+    private async Task<string?> ResolveLocalConflictAsync(string name,
+        (bool IsDirectory, long Size, DateTime LastWriteTime) sourceInfo,
+        string localPath)
+    {
+        if (!File.Exists(localPath) && !Directory.Exists(localPath))
+            return localPath;
+
+        var destInfo = GetLocalEntryInfo(localPath);
+        var sourceDetails = FormatEntryDetails(sourceInfo.IsDirectory, sourceInfo.Size, sourceInfo.LastWriteTime);
+        var destDetails = FormatEntryDetails(destInfo.IsDirectory, destInfo.Size, destInfo.LastWriteTime);
+
+        var choice = await _dialogService.ConfirmConflictAsync(
+            "Name conflict",
+            $"'{name}' already exists in the destination. What do you want to do?",
+            sourceDetails,
+            destDetails);
+
+        if (choice == ConflictChoice.Cancel)
+            return null;
+
+        if (choice == ConflictChoice.Duplicate)
+            return GetUniqueLocalDestinationPath(Path.GetDirectoryName(localPath)!, Path.GetFileName(localPath));
+
+        TryDeleteLocalPath(localPath);
+        return localPath;
+    }
+
+    private async Task<DownloadPlan> BuildDownloadPlanAsync(FileEntry rootEntry,
+        string remoteRootPath,
+        string localRootPath,
+        CancellationToken cancellationToken)
+    {
+        var plan = new DownloadPlan();
+
+        if (rootEntry.IsDirectory)
         {
-            var remotePath = CurrentPath.EndsWith('/') ? CurrentPath + target.Name : $"{CurrentPath}/{target.Name}";
-            var localPath = System.IO.Path.Combine(localFolder, target.Name);
+            await AppendDirectoryDownloadPlanAsync(
+                remoteRootPath,
+                localRootPath,
+                rootEntry.Name,
+                plan,
+                cancellationToken);
+            return plan;
+        }
 
-            IsTransferring = true;
-            TransferTitle = $"Downloading {target.Name}";
-            TransferProgress = 0;
+        plan.Files.Add(
+            new DownloadFilePlanItem
+            {
+                RemotePath = remoteRootPath,
+                LocalPath = localRootPath,
+                DisplayName = rootEntry.Name,
+                Size = rootEntry.Size
+            });
+        return plan;
+    }
 
-            var progress =
-                new Progress<double>(p =>
+    private async Task AppendDirectoryDownloadPlanAsync(string remoteDirectoryPath,
+        string localDirectoryPath,
+        string displayPrefix,
+        DownloadPlan plan,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        plan.Directories.Add(localDirectoryPath);
+
+        var entries = await _sftpService.ListDirectoryAsync(remoteDirectoryPath);
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var remoteEntryPath = CombineRemotePath(remoteDirectoryPath, entry.Name);
+            var localEntryPath = Path.Combine(localDirectoryPath, entry.Name);
+            var displayName = $"{displayPrefix}/{entry.Name}";
+
+            if (entry.IsDirectory)
+            {
+                await AppendDirectoryDownloadPlanAsync(
+                    remoteEntryPath,
+                    localEntryPath,
+                    displayName,
+                    plan,
+                    cancellationToken);
+                continue;
+            }
+
+            plan.Files.Add(
+                new DownloadFilePlanItem
                 {
-                    TransferProgress = p;
-                    StatusMessage = $"Downloading {target.Name}: {p:F0}%";
+                    RemotePath = remoteEntryPath,
+                    LocalPath = localEntryPath,
+                    DisplayName = displayName,
+                    Size = entry.Size
                 });
-
-            await _sftpService.DownloadFileAsync(remotePath, localPath, progress, _transferCts.Token);
-            StatusMessage = $"Downloaded: {target.Name}";
-        }
-        catch (OperationCanceledException)
-        {
-            StatusMessage = "Download cancelled";
-        }
-        catch (Exception ex)
-        {
-            LoggingService.Error("Download failed", ex);
-            StatusMessage = $"Download Error: {ex.Message}";
-        }
-        finally
-        {
-            IsTransferring = false;
-            _transferCts.Dispose();
-            _transferCts = null;
         }
     }
 
     public async Task UploadFiles(IEnumerable<string> localPaths)
     {
         if (!IsConnected) return;
+        var pathList = localPaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim())
+            .ToList();
+        if (pathList.Count == 0) return;
 
-        _transferCts = new CancellationTokenSource();
+        var request =
+            new UploadJobRequest
+            {
+                DestinationPath = CurrentPath,
+                LocalPaths = pathList
+            };
+
+        EnqueueTransfer(CreateUploadTransferDefinition(request));
+    }
+
+    private async Task<List<UploadSourceTarget>?> ResolveUploadTargetsAsync(IEnumerable<string> localPaths,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        var targets = new List<UploadSourceTarget>();
+        var seenLocalPaths = new HashSet<string>(GetPathComparerForCurrentPlatform());
+
+        foreach (var rawPath in localPaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(rawPath))
+                continue;
+
+            string localPath;
+            try
+            {
+                localPath = Path.GetFullPath(rawPath);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (!seenLocalPaths.Add(localPath))
+                continue;
+
+            if (File.Exists(localPath))
+            {
+                var fileInfo = new FileInfo(localPath);
+                var fileName = fileInfo.Name;
+                var remoteTargetPath = CombineRemotePath(destinationPath, fileName);
+                var sourceInfo = (IsDirectory: false, Size: fileInfo.Length, LastWriteTime: fileInfo.LastWriteTime);
+                var resolvedTargetPath =
+                    await ResolveUploadConflictAsync(
+                        fileName,
+                        sourceInfo,
+                        remoteTargetPath,
+                        destinationPath,
+                        cancellationToken);
+                if (resolvedTargetPath is null)
+                    return null;
+
+                targets.Add(
+                    new UploadSourceTarget
+                    {
+                        LocalPath = localPath,
+                        RemoteRootPath = resolvedTargetPath,
+                        IsDirectory = false,
+                        DisplayRootName = Path.GetFileName(resolvedTargetPath)
+                    });
+                continue;
+            }
+
+            if (Directory.Exists(localPath))
+            {
+                var directoryInfo = new DirectoryInfo(localPath);
+                var folderName = directoryInfo.Name;
+                if (string.IsNullOrWhiteSpace(folderName))
+                    continue;
+
+                var remoteTargetPath = CombineRemotePath(destinationPath, folderName);
+                var sourceInfo = (IsDirectory: true, Size: 0L, LastWriteTime: directoryInfo.LastWriteTime);
+                var resolvedTargetPath =
+                    await ResolveUploadConflictAsync(
+                        folderName,
+                        sourceInfo,
+                        remoteTargetPath,
+                        destinationPath,
+                        cancellationToken);
+                if (resolvedTargetPath is null)
+                    return null;
+
+                targets.Add(
+                    new UploadSourceTarget
+                    {
+                        LocalPath = localPath,
+                        RemoteRootPath = resolvedTargetPath,
+                        IsDirectory = true,
+                        DisplayRootName = Path.GetFileName(resolvedTargetPath.TrimEnd('/'))
+                    });
+                continue;
+            }
+
+            LoggingService.Warn($"Upload skipped path that does not exist: {localPath}");
+        }
+
+        return targets;
+    }
+
+    private async Task<string?> ResolveUploadConflictAsync(string name,
+        (bool IsDirectory, long Size, DateTime LastWriteTime) sourceInfo,
+        string remoteTargetPath,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var normalizedTargetPath = NormalizeRemoteAbsolutePath(remoteTargetPath);
+        var targetExists = await _sftpService.PathExistsAsync(normalizedTargetPath);
+        (bool IsDirectory, long Size, DateTime LastWriteTime)? destinationInfo = null;
+
+        // Some servers report false negatives for directory existence checks.
+        // Fall back to listing the parent folder so repeated directory uploads still
+        // trigger conflict resolution instead of silently merging/overwriting.
+        if (!targetExists && sourceInfo.IsDirectory)
+        {
+            var parentPath = NormalizeRemoteAbsolutePath(destinationPath);
+            var existingEntry = await TryFindRemoteChildEntryAsync(parentPath, name, cancellationToken);
+            if (existingEntry is not null)
+            {
+                targetExists = true;
+                destinationInfo = (existingEntry.IsDirectory, existingEntry.Size, existingEntry.LastWriteTime);
+            }
+        }
+
+        if (!targetExists)
+            return normalizedTargetPath;
+
+        var destinationIsDirectory = destinationInfo is { } info
+            ? info.IsDirectory
+            : await _sftpService.IsDirectoryAsync(normalizedTargetPath);
+
+        var isDirectoryMerge = sourceInfo.IsDirectory && destinationIsDirectory;
+        var message =
+            isDirectoryMerge
+                ? $"Folder '{name}' already exists in destination. Overwrite will replace conflicting files during upload; duplicate will create a new folder name."
+                : $"'{name}' already exists in the destination. What do you want to do?";
+
+        var choice = (
+                await PromptConflictWithScopeAsync(
+                    name,
+                    sourceInfo,
+                    normalizedTargetPath,
+                    allowApplyToAll: false,
+                    destinationInfo: destinationInfo,
+                    message: message))
+            .Choice;
+        if (choice == ConflictChoice.Cancel)
+            return null;
+
+        if (choice == ConflictChoice.Duplicate)
+            return await GetUniqueDestinationPathAsync(destinationPath, name);
+
+        if (isDirectoryMerge)
+            return normalizedTargetPath;
+
+        if (destinationIsDirectory)
+            await _sftpService.DeleteDirectoryAsync(normalizedTargetPath);
+        else
+            await _sftpService.DeleteFileAsync(normalizedTargetPath);
+
+        return normalizedTargetPath;
+    }
+
+    private async Task<FileEntry?> TryFindRemoteChildEntryAsync(string parentPath,
+        string childName,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
 
         try
         {
-            IsTransferring = true;
-            var pathList = new List<string>(localPaths);
-            var total = pathList.Count;
-            var current = 0;
-
-            foreach (var localPath in pathList.TakeWhile(_ => !_transferCts.Token.IsCancellationRequested))
-            {
-                current++;
-                var fileName = System.IO.Path.GetFileName(localPath);
-                var remotePath = CurrentPath.EndsWith('/') ? CurrentPath + fileName : $"{CurrentPath}/{fileName}";
-
-                TransferTitle = $"Uploading {current}/{total}: {fileName}";
-                TransferProgress = 0;
-
-                var progress =
-                    new Progress<double>(p =>
-                    {
-                        TransferProgress = p;
-                        StatusMessage = $"Uploading {fileName}: {p:F0}%";
-                    });
-
-                await _sftpService.UploadFileAsync(localPath, remotePath, progress, _transferCts.Token);
-            }
-
-            StatusMessage = _transferCts.Token.IsCancellationRequested ? "Upload cancelled" : "Upload complete";
-
-            await RefreshFileList();
-        }
-        catch (OperationCanceledException)
-        {
-            StatusMessage = "Upload cancelled";
+            var entries = await _sftpService.ListDirectoryAsync(parentPath);
+            return entries.FirstOrDefault(entry => string.Equals(entry.Name, childName, StringComparison.Ordinal));
         }
         catch (Exception ex)
         {
-            LoggingService.Error("Upload failed", ex);
-            StatusMessage = $"Upload Error: {ex.Message}";
+            LoggingService.Warn(
+                $"Could not verify remote upload conflict for '{childName}' in '{parentPath}'. {ex.Message}");
+            return null;
         }
-        finally
+    }
+
+    private async Task<bool> ResolveUploadFileConflictsAsync(TransferJob job,
+        UploadPlan plan,
+        CancellationToken cancellationToken)
+    {
+        if (plan.Files.Count == 0)
+            return true;
+
+        ConflictChoice? applyChoiceToAll = null;
+
+        for (var i = 0; i < plan.Files.Count; i++)
         {
-            IsTransferring = false;
-            _transferCts.Dispose();
-            _transferCts = null;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var item = plan.Files[i];
+            var checkTitle = $"Checking conflicts {i + 1}/{plan.Files.Count}";
+            UpdateTransferUi(job, checkTitle, $"Checking {item.DisplayName}");
+
+            if (!await _sftpService.PathExistsAsync(item.RemotePath))
+                continue;
+
+            var sourceInfo = GetLocalEntryInfo(item.LocalPath);
+            var destinationInfo = await _sftpService.GetEntryInfoAsync(item.RemotePath);
+
+            ConflictChoice choice;
+            if (applyChoiceToAll is { } allChoice)
+            {
+                choice = allChoice;
+            }
+            else
+            {
+                var decision = await PromptConflictWithScopeAsync(
+                    Path.GetFileName(item.RemotePath),
+                    sourceInfo,
+                    item.RemotePath,
+                    allowApplyToAll: true,
+                    destinationInfo: destinationInfo);
+                choice = decision.Choice;
+
+                if (choice == ConflictChoice.Cancel)
+                    return false;
+
+                if (decision.ApplyToAll)
+                    applyChoiceToAll = choice;
+            }
+
+            if (choice == ConflictChoice.Cancel)
+                return false;
+
+            if (choice == ConflictChoice.Duplicate)
+            {
+                var destinationFolder = GetRemoteParentPath(item.RemotePath);
+                var fileName = Path.GetFileName(item.RemotePath);
+                item.RemotePath = await GetUniqueDestinationPathAsync(destinationFolder, fileName);
+                continue;
+            }
+
+            UpdateTransferUi(job, checkTitle, $"Replacing {item.DisplayName}");
+            if (destinationInfo.IsDirectory)
+                await _sftpService.DeleteDirectoryAsync(item.RemotePath);
+            else
+                await _sftpService.DeleteFileAsync(item.RemotePath);
         }
+
+        return true;
+    }
+
+    private UploadPlan BuildUploadPlan(IEnumerable<UploadSourceTarget> sourceTargets,
+        CancellationToken cancellationToken)
+    {
+        var plan = new UploadPlan();
+        var seenRemoteDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var seenLocalFiles = new HashSet<string>(GetPathComparerForCurrentPlatform());
+
+        foreach (var sourceTarget in sourceTargets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (sourceTarget.IsDirectory)
+            {
+                AddDirectoryTreeToUploadPlan(
+                    plan,
+                    seenRemoteDirectories,
+                    seenLocalFiles,
+                    sourceTarget.LocalPath,
+                    sourceTarget.RemoteRootPath,
+                    sourceTarget.DisplayRootName,
+                    cancellationToken);
+                continue;
+            }
+
+            AddFileToUploadPlan(
+                plan,
+                seenLocalFiles,
+                sourceTarget.LocalPath,
+                sourceTarget.RemoteRootPath,
+                sourceTarget.DisplayRootName);
+        }
+
+        plan.Directories.Sort(
+            (left, right) => GetRemotePathDepth(left).CompareTo(GetRemotePathDepth(right)));
+
+        return plan;
+    }
+
+    private void AddDirectoryTreeToUploadPlan(UploadPlan plan,
+        HashSet<string> seenRemoteDirectories,
+        HashSet<string> seenLocalFiles,
+        string localRootPath,
+        string remoteRootPath,
+        string displayRootName,
+        CancellationToken cancellationToken)
+    {
+        AddDirectoryToUploadPlan(plan, seenRemoteDirectories, remoteRootPath);
+
+        foreach (var directoryPath in Directory.EnumerateDirectories(localRootPath, "*", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var relativeDirectoryPath = Path.GetRelativePath(localRootPath, directoryPath);
+            var remoteDirectoryPath = CombineRemotePath(remoteRootPath, ToRemoteRelativePath(relativeDirectoryPath));
+            AddDirectoryToUploadPlan(plan, seenRemoteDirectories, remoteDirectoryPath);
+        }
+
+        foreach (var filePath in Directory.EnumerateFiles(localRootPath, "*", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var relativeFilePath = Path.GetRelativePath(localRootPath, filePath);
+            var remoteFilePath = CombineRemotePath(remoteRootPath, ToRemoteRelativePath(relativeFilePath));
+            var displayName = $"{displayRootName}/{ToRemoteRelativePath(relativeFilePath)}";
+            AddFileToUploadPlan(plan, seenLocalFiles, filePath, remoteFilePath, displayName);
+        }
+    }
+
+    private static void AddDirectoryToUploadPlan(UploadPlan plan,
+        HashSet<string> seenRemoteDirectories,
+        string remoteDirectoryPath)
+    {
+        var normalizedRemoteDirectory = NormalizeRemoteAbsolutePath(remoteDirectoryPath);
+        if (normalizedRemoteDirectory.Length == 0 || normalizedRemoteDirectory == "/")
+            return;
+
+        if (seenRemoteDirectories.Add(normalizedRemoteDirectory))
+            plan.Directories.Add(normalizedRemoteDirectory);
+    }
+
+    private static void AddFileToUploadPlan(UploadPlan plan,
+        HashSet<string> seenLocalFiles,
+        string localFilePath,
+        string remoteFilePath,
+        string? displayName = null)
+    {
+        if (!seenLocalFiles.Add(localFilePath))
+            return;
+
+        var fileInfo = new FileInfo(localFilePath);
+        plan.Files.Add(
+            new UploadItem
+            {
+                LocalPath = localFilePath,
+                RemotePath = NormalizeRemoteAbsolutePath(remoteFilePath),
+                DisplayName = string.IsNullOrWhiteSpace(displayName) ? fileInfo.Name : displayName,
+                Size = fileInfo.Exists ? fileInfo.Length : 0
+            });
+    }
+
+    private static int GetRemotePathDepth(string remotePath)
+    {
+        return NormalizeRemoteAbsolutePath(remotePath).Count(ch => ch == '/');
+    }
+
+    private static string CombineRemotePath(string basePath,
+        string childPath)
+    {
+        var normalizedBase = NormalizeRemoteAbsolutePath(basePath);
+        var normalizedChild = childPath.Replace('\\', '/').Trim('/');
+        if (normalizedChild.Length == 0)
+            return normalizedBase;
+
+        return normalizedBase == "/"
+            ? $"/{normalizedChild}"
+            : $"{normalizedBase}/{normalizedChild}";
+    }
+
+    private static string ToRemoteRelativePath(string localRelativePath)
+    {
+        return localRelativePath
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/')
+            .Trim('/');
+    }
+
+    private static string GetRemoteParentPath(string remotePath)
+    {
+        var normalized = NormalizeRemoteAbsolutePath(remotePath);
+        if (normalized == "/")
+            return "/";
+
+        var separatorIndex = normalized.LastIndexOf('/');
+        if (separatorIndex <= 0)
+            return "/";
+
+        return normalized[..separatorIndex];
+    }
+
+    private static string NormalizeRemoteAbsolutePath(string remotePath)
+    {
+        if (string.IsNullOrWhiteSpace(remotePath))
+            return "/";
+
+        var normalized = remotePath.Trim().Replace('\\', '/');
+        if (!normalized.StartsWith('/'))
+            normalized = "/" + normalized;
+
+        while (normalized.Contains("//", StringComparison.Ordinal))
+            normalized = normalized.Replace("//", "/", StringComparison.Ordinal);
+
+        if (normalized.Length > 1)
+            normalized = normalized.TrimEnd('/');
+
+        return normalized;
+    }
+
+    private static StringComparer GetPathComparerForCurrentPlatform()
+    {
+        return OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
     }
 }
