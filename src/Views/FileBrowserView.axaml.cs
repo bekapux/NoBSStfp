@@ -23,6 +23,7 @@ public partial class FileBrowserView : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        AddHandler(TreeViewItem.ExpandedEvent, OnTreeItemExpanded, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DragOverEvent, OnDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DragEnterEvent, OnDragEnter, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DragLeaveEvent, OnDragLeave, RoutingStrategies.Bubble, handledEventsToo: true);
@@ -101,6 +102,28 @@ public partial class FileBrowserView : UserControl
         }
     }
 
+    private async void OnTreeViewDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is not TreeView tree)
+            return;
+        if (tree.SelectedItem is not RemoteTreeNode node || node.IsPlaceholder)
+            return;
+        if (DataContext is not SessionViewModel vm)
+            return;
+
+        await vm.OpenItem(node.Entry);
+    }
+
+    private async void OnTreeItemExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (e.Source is not TreeViewItem { DataContext: RemoteTreeNode node })
+            return;
+        if (DataContext is not SessionViewModel vm)
+            return;
+
+        await vm.ExpandTreeNodeAsync(node);
+    }
+
     private void OnDragEnter(object? sender, DragEventArgs e)
     {
         if (HasExternalFiles(e.DataTransfer))
@@ -126,7 +149,7 @@ public partial class FileBrowserView : UserControl
 
     private void OnRowPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is Control control && control.DataContext is FileEntry entry)
+        if (sender is Control control && TryGetEntry(control.DataContext) is { } entry)
         {
             if (entry.Name == "..")
             {
@@ -169,14 +192,12 @@ public partial class FileBrowserView : UserControl
                 _dragStartPoint = null; // Reset to avoid re-triggering
                 _dragSource = null;
 
-                if (source.DataContext is FileEntry fileEntry && DataContext is SessionViewModel vm)
+                if (TryGetEntry(source.DataContext) is { } fileEntry && DataContext is SessionViewModel vm)
                 {
                     if (fileEntry.Name == "..")
                         return;
 
-                    var sourcePath = vm.CurrentPath.EndsWith("/")
-                        ? vm.CurrentPath + fileEntry.Name
-                        : $"{vm.CurrentPath}/{fileEntry.Name}";
+                    var sourcePath = GetEntryRemotePath(vm.CurrentPath, fileEntry);
                     var dataTransfer = new DataTransfer();
                     dataTransfer.Add(DataTransferItem.Create(InternalPathFormat, sourcePath));
                     await DragDrop.DoDragDropAsync(e, dataTransfer, DragDropEffects.Move);
@@ -198,7 +219,10 @@ public partial class FileBrowserView : UserControl
         if (!string.IsNullOrEmpty(sourcePath))
         {
             // Check if the target is a directory
-            if (sender is Control control && control.DataContext is FileEntry targetEntry && targetEntry.IsDirectory)
+            if (sender is Control control &&
+                TryGetEntry(control.DataContext) is { } targetEntry &&
+                targetEntry.IsDirectory &&
+                !targetEntry.IsSymbolicLink)
             {
                 SetDropTargetHighlight(control);
                 e.DragEffects = DragDropEffects.Move;
@@ -216,14 +240,18 @@ public partial class FileBrowserView : UserControl
         ClearDropTargetHighlight();
 
         var sourcePath = TryGetInternalPath(e.DataTransfer);
-        if (!string.IsNullOrEmpty(sourcePath) && sender is Control control && control.DataContext is FileEntry targetEntry && targetEntry.IsDirectory)
+        if (!string.IsNullOrEmpty(sourcePath) &&
+            sender is Control control &&
+            TryGetEntry(control.DataContext) is { } targetEntry &&
+            targetEntry.IsDirectory &&
+            !targetEntry.IsSymbolicLink)
         {
             if (DataContext is SessionViewModel vm)
             {
                 var destFolderPath =
                     targetEntry.Name == ".."
                         ? GetParentRemotePath(vm.CurrentPath)
-                        : (vm.CurrentPath.EndsWith("/") ? vm.CurrentPath + targetEntry.Name : $"{vm.CurrentPath}/{targetEntry.Name}");
+                        : GetEntryRemotePath(vm.CurrentPath, targetEntry);
                 await vm.MoveItem(sourcePath, destFolderPath);
             }
             e.Handled = true;
@@ -292,7 +320,7 @@ public partial class FileBrowserView : UserControl
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
         if (DataContext is not SessionViewModel vm) return;
-        if (!FileGrid.IsKeyboardFocusWithin) return;
+        if (!FileGrid.IsKeyboardFocusWithin && !RemoteTreeView.IsKeyboardFocusWithin) return;
         var isMac = OperatingSystem.IsMacOS();
         var commandPressed = isMac
             ? e.KeyModifiers.HasFlag(KeyModifiers.Meta)
@@ -406,9 +434,32 @@ public partial class FileBrowserView : UserControl
         return normalized[..separatorIndex];
     }
 
+    private static string GetEntryRemotePath(string currentPath,
+        FileEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.RemotePath))
+            return entry.RemotePath;
+
+        return currentPath.EndsWith("/")
+            ? currentPath + entry.Name
+            : $"{currentPath}/{entry.Name}";
+    }
+
+    private static FileEntry? TryGetEntry(object? dataContext)
+    {
+        return dataContext switch
+        {
+            FileEntry fileEntry => fileEntry,
+            RemoteTreeNode { IsPlaceholder: false } treeNode => treeNode.Entry,
+            _ => null
+        };
+    }
+
     private void SetDropTargetHighlight(Control control)
     {
-        var target = control.FindAncestorOfType<DataGridRow>() ?? control;
+        var target = control.FindAncestorOfType<DataGridRow>() ??
+                     control.FindAncestorOfType<TreeViewItem>() ??
+                     control;
 
         if (ReferenceEquals(_highlightedDropTarget, target))
             return;

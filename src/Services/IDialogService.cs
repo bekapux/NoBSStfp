@@ -16,6 +16,12 @@ public interface IDialogService
         string sourceDetails,
         string destinationDetails,
         bool allowApplyToAll);
+    Task<SymlinkDialogResult> ConfirmSymlinkBehaviorAsync(
+        string title,
+        string message,
+        string details,
+        bool allowApplyToAll);
+    Task<RemotePropertiesDialogResult?> ShowRemotePropertiesDialogAsync(RemotePropertiesDialogRequest request);
     Task<ServerProfile?> ShowServerFormAsync(ServerProfile? existing = null);
     Task<ConnectInfo?> ShowConnectDialogAsync(string title, string host, ServerProfile? defaults = null);
     Task<string?> PickFolderAsync();
@@ -30,3 +36,12 @@ public enum ConflictChoice
 }
 
 public readonly record struct ConflictDialogResult(ConflictChoice Choice, bool ApplyToAll);
+
+public enum SymlinkBehaviorChoice
+{
+    Cancel,
+    OperateOnLinkEntry,
+    FollowLinkTarget
+}
+
+public readonly record struct SymlinkDialogResult(SymlinkBehaviorChoice Choice, bool ApplyToAll);

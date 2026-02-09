@@ -37,33 +37,87 @@
             </StackPanel>
         </StackPanel>
 
-        <!-- Navigation Bar & Disconnect -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="5" Margin="5,10,5,5"
-            IsVisible="{Binding IsConnected}">
-            <TextBox Text="{Binding CurrentPath}" Width="300" />
-            <Button Command="{Binding RefreshFileListCommand}" Content="Refresh" />
-            <Button Command="{Binding DisconnectCommand}" Content="Disconnect" Background="#CC3333"
-                Foreground="White" />
-            <Button Content="Create...">
-                <Button.Flyout>
-                    <MenuFlyout>
-                        <MenuItem Header="File" Command="{Binding CreateFileCommand}" />
-                        <MenuItem Header="Folder" Command="{Binding CreateFolderCommand}" />
-                    </MenuFlyout>
-                </Button.Flyout>
-            </Button>
-            <ToggleButton IsChecked="{Binding ShowHiddenFiles}" ToolTip.Tip="Show Hidden Files" Padding="6">
-                <StackPanel Orientation="Horizontal" Spacing="5">
-                    <TextBlock Text="👁️" VerticalAlignment="Center"/>
-                    <TextBlock Text="Hidden" VerticalAlignment="Center"/>
-                </StackPanel>
-            </ToggleButton>
-            <Button Command="{Binding OpenExternalTerminalCommand}" ToolTip.Tip="Open OS Terminal" Padding="6">
-                <StackPanel Orientation="Horizontal" Spacing="5">
-                    <TextBlock Text="💻" VerticalAlignment="Center"/>
-                    <TextBlock Text="Terminal" VerticalAlignment="Center"/>
-                </StackPanel>
-            </Button>
+        <!-- Navigation Bar -->
+        <StackPanel Grid.Row="1" Spacing="6" Margin="5,10,5,5"
+                    IsVisible="{Binding IsConnected}">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
+                  ColumnSpacing="5"
+                  HorizontalAlignment="Stretch">
+                <TextBox Grid.Column="0" Text="{Binding CurrentPath}" Width="300" />
+                <Button Grid.Column="1" Command="{Binding RefreshFileListCommand}" Content="Refresh" />
+                <Button Grid.Column="2"
+                        Command="{Binding DisconnectCommand}"
+                        Content="Disconnect"
+                        Background="#CC3333"
+                        Foreground="White" />
+                <Button Grid.Column="3" Content="Create...">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuItem Header="File" Command="{Binding CreateFileCommand}" />
+                            <MenuItem Header="Folder" Command="{Binding CreateFolderCommand}" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <ToggleButton Grid.Column="4"
+                              IsChecked="{Binding ShowHiddenFiles}"
+                              ToolTip.Tip="Show Hidden Files"
+                              Padding="6">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="👁️" VerticalAlignment="Center"/>
+                        <TextBlock Text="Hidden" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ToggleButton>
+                <CheckBox Grid.Column="5"
+                          Content="Verify"
+                          IsChecked="{Binding VerifyTransfersAfterTransfer}"
+                          VerticalAlignment="Center"
+                          ToolTip.Tip="Verify upload/download integrity after transfer (SHA-256 for files up to 64 MB; larger files use size/time fallback)"/>
+                <Button Grid.Column="7"
+                        Command="{Binding OpenExternalTerminalCommand}"
+                        ToolTip.Tip="Open OS Terminal"
+                        Padding="6">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="💻" VerticalAlignment="Center"/>
+                        <TextBlock Text="Terminal" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto"
+                  ColumnSpacing="6"
+                  HorizontalAlignment="Stretch">
+                <TextBlock Grid.Column="0"
+                           Text="Search:"
+                           VerticalAlignment="Center"
+                           Foreground="#A0A0A0"/>
+                <TextBox Grid.Column="1"
+                         Width="320"
+                         Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                         Watermark="Filter current folder (or entire tree with Recursive)"/>
+                <Button Grid.Column="2"
+                        Content="Clear"
+                        Command="{Binding ClearSearchCommand}"/>
+                <CheckBox Grid.Column="3"
+                          Content="Recursive"
+                          IsChecked="{Binding SearchRecursive}"
+                          VerticalAlignment="Center"/>
+                <ProgressBar Grid.Column="4"
+                             Width="90"
+                             Height="6"
+                             IsIndeterminate="True"
+                             IsVisible="{Binding IsSearchInProgress}"
+                             VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="6"
+                           Margin="14,0,0,0"
+                           Text="View:"
+                           VerticalAlignment="Center"
+                           Foreground="#A0A0A0"/>
+                <ComboBox Grid.Column="7"
+                          Width="118"
+                          Margin="4,0,0,0"
+                          ItemsSource="{Binding ExplorerViewOptions}"
+                          SelectedItem="{Binding SelectedExplorerView}"/>
+            </Grid>
         </StackPanel>
 
         <!-- Connected File Explorer -->
@@ -84,6 +138,7 @@
                 <Grid>
                     <DataGrid x:Name="FileGrid" ItemsSource="{Binding Files}"
                               SelectedItem="{Binding SelectedFile}"
+                              IsVisible="{Binding IsListView}"
                               IsReadOnly="True"
                               SelectionMode="Extended"
                               GridLinesVisibility="All"
@@ -123,6 +178,10 @@
                                             <MenuItem Header="Delete"
                                                       Command="{Binding #FileBrowserRoot.DataContext.DeleteCommand}"
                                                       CommandParameter="{Binding}"/>
+                                            <Separator/>
+                                            <MenuItem Header="Properties..."
+                                                      Command="{Binding #FileBrowserRoot.DataContext.ShowPropertiesCommand}"
+                                                      CommandParameter="{Binding}"/>
                                         </ContextMenu>
                                     </Setter.Value>
                                 </Setter>
@@ -146,27 +205,117 @@
                                                     DragDrop.Drop="OnRowDrop">
                                             <!-- Folder Icon -->
                                             <TextBlock Text="📁" Foreground="#E8A87C"
-                                                       IsVisible="{Binding IsDirectory}"
+                                                       IsVisible="{Binding ShowDirectoryIcon}"
                                                        Width="20" Height="20"
                                                        VerticalAlignment="Center"
                                                        TextAlignment="Center"/>
                                             <!-- File Icon -->
                                             <TextBlock Text="📄" Foreground="Gray"
-                                                       IsVisible="{Binding !IsDirectory}"
+                                                       IsVisible="{Binding ShowFileIcon}"
                                                        Width="20" Height="20"
                                                        VerticalAlignment="Center"
                                                        TextAlignment="Center"/>
-                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                            <!-- Symlink Icon -->
+                                            <TextBlock Text="🔗" Foreground="#F2C14E"
+                                                       IsVisible="{Binding ShowSymlinkIcon}"
+                                                       Width="20" Height="20"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Center"/>
+                                            <TextBlock Text="{Binding NameDisplay}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Size" Binding="{Binding SizeDisplay}"
                                                 Width="Auto" />
-                            <DataGridTextColumn Header="Date" Binding="{Binding LastWriteTime}"
+                            <DataGridTextColumn Header="Date" Binding="{Binding DateDisplay}"
                                                 Width="Auto" />
                         </DataGrid.Columns>
                     </DataGrid>
+
+                    <Grid IsVisible="{Binding IsTreeView}" RowDefinitions="Auto,*">
+                        <Border Grid.Row="0"
+                                BorderThickness="0,0,0,1"
+                                BorderBrush="#2E2E2E"
+                                Padding="8,4">
+                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="14">
+                                <TextBlock Grid.Column="0" Text="Name" FontWeight="SemiBold" Foreground="#D0D0D0"/>
+                                <TextBlock Grid.Column="1" Text="Size" FontWeight="SemiBold" Foreground="#D0D0D0"/>
+                                <TextBlock Grid.Column="2" Text="Date" FontWeight="SemiBold" Foreground="#D0D0D0"/>
+                            </Grid>
+                        </Border>
+
+                        <TreeView Grid.Row="1"
+                                  x:Name="RemoteTreeView"
+                                  ItemsSource="{Binding TreeItems}"
+                                  SelectedItem="{Binding SelectedTreeNode}"
+                                  DoubleTapped="OnTreeViewDoubleTapped">
+                            <TreeView.Styles>
+                                <Style Selector="TreeViewItem.DropTargetRow">
+                                    <Setter Property="Background" Value="#2A4AA3FF"/>
+                                </Style>
+                            </TreeView.Styles>
+                            <TreeView.ItemTemplate>
+                                <TreeDataTemplate x:DataType="models:RemoteTreeNode"
+                                                  ItemsSource="{Binding Children}">
+                                    <Grid ColumnDefinitions="*,Auto,Auto"
+                                          ColumnSpacing="14"
+                                          PointerPressed="OnRowPointerPressed"
+                                          PointerMoved="OnRowPointerMoved"
+                                          PointerReleased="OnRowPointerReleased"
+                                          DragDrop.AllowDrop="True"
+                                          DragDrop.DragOver="OnRowDragOver"
+                                          DragDrop.Drop="OnRowDrop">
+                                        <Grid.ContextMenu>
+                                            <ContextMenu x:DataType="models:RemoteTreeNode">
+                                                <MenuItem Header="Properties..."
+                                                          Command="{Binding #FileBrowserRoot.DataContext.ShowPropertiesCommand}"
+                                                          CommandParameter="{Binding Entry}"
+                                                          IsEnabled="{Binding !IsPlaceholder}"/>
+                                            </ContextMenu>
+                                        </Grid.ContextMenu>
+                                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="📁"
+                                                       Foreground="#E8A87C"
+                                                       IsVisible="{Binding ShowDirectoryIcon}"
+                                                       Width="20"
+                                                       Height="20"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Center"/>
+                                            <TextBlock Text="📄"
+                                                       Foreground="Gray"
+                                                       IsVisible="{Binding ShowFileIcon}"
+                                                       Width="20"
+                                                       Height="20"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Center"/>
+                                            <TextBlock Text="🔗"
+                                                       Foreground="#F2C14E"
+                                                       IsVisible="{Binding ShowSymlinkIcon}"
+                                                       Width="20"
+                                                       Height="20"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Center"/>
+                                            <TextBlock Text="{Binding NameDisplay}"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock Text="…"
+                                                       Foreground="#8A929B"
+                                                       IsVisible="{Binding IsLoading}"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding SizeDisplay}"
+                                                   Foreground="#C0C0C0"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding DateDisplay}"
+                                                   Foreground="#C0C0C0"
+                                                   VerticalAlignment="Center"/>
+                                    </Grid>
+                                </TreeDataTemplate>
+                            </TreeView.ItemTemplate>
+                        </TreeView>
+                    </Grid>
 
                     <!-- Drag Overlay -->
                     <Border x:Name="DragOverlay" Background="#99000000" IsVisible="False"

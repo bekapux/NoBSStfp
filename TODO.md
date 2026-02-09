@@ -1,6 +1,6 @@
 # NoBSSftp TODO / Implementation Backlog
 
-Last updated: 2026-02-08
+Last updated: 2026-02-09
 
 This file tracks known feature gaps and implementation work identified from the current codebase.
 
@@ -11,64 +11,61 @@ This file tracks known feature gaps and implementation work identified from the 
 - `P2`: Quality-of-life and competitive features
 - `P3`: Engineering quality and maintainability
 
+## P0 - Security and Integrity Gaps
+
 ## P1 - Core Capability Gaps
 
-- [x] Transfer queue, retry, and resume
-  - Problem: current transfer UX is single-operation state with cancel only.
+- [x] SSH agent and modern auth options
+  - Problem:
+    - Auth currently focuses on password/private key file only.
   - Implementation target:
-    - Queue model with pending/running/completed/failed states.
-    - Retry failed jobs.
-    - Resume partially completed large transfers where protocol/server support allows.
+    - Add support for ssh-agent identities and profile-level auth preference order.
   - Acceptance criteria:
-    - Multiple jobs can be queued without blocking UI.
-    - Failed jobs are retryable.
-    - Long transfers can recover from transient interruptions.
-
-- [ ] Integrity verification (optional post-transfer)
-  - Problem: no checksum/validation step after transfer.
-  - Implementation target:
-    - Optional hash compare (where feasible) or size/time validation fallback.
-  - Acceptance criteria:
-    - Verification result is visible per transfer.
-    - Corruption is surfaced clearly.
+    - Users can connect with agent-backed keys without duplicating secrets in app profiles.
 
 ## P2 - File Manager and Workflow Features
 
-- [ ] Local+remote dual-pane workflow
-  - Problem: current explorer is remote-only.
+- [ ] Bandwidth and concurrency controls
+  - Problem:
+    - Transfer queue is functional but lacks speed limits and configurable parallelism.
   - Implementation target:
-    - Add local pane with copy/move between panes.
-    - Optional directory compare/sync mode.
+    - Add per-session global bandwidth cap and max parallel transfer count.
   - Acceptance criteria:
-    - Users can transfer without OS drag/drop dependency.
-    - Sync plan can be previewed before execution.
+    - User can cap throughput and tune concurrency for network stability.
 
-- [ ] Search/filter in remote tree
-  - Problem: no filename/path search in current directory tree.
+- [ ] Manual pause/resume controls in transfer queue
+  - Problem:
+    - Queue supports retry/resume internally, but users cannot pause/resume jobs on demand.
   - Implementation target:
-    - Fast filter for current listing.
-    - Optional recursive remote search.
+    - Add Pause/Resume actions with clear job state transitions.
   - Acceptance criteria:
-    - Large directories remain responsive.
-    - Results can be opened/transferred directly.
+    - Long transfers can be paused and resumed without restarting the job.
+
+- [ ] Remote path bookmarks (per server)
+  - Problem:
+    - Frequent working directories require repeated manual navigation.
+  - Implementation target:
+    - Add bookmark add/remove/rename and quick jump in connected file explorer.
+  - Acceptance criteria:
+    - Common remote paths are reachable in one click.
+
+- [ ] Folder sync mode (one-way mirror/update with preview)
+  - Problem:
+    - Bulk folder operations require repeated manual transfer actions.
+  - Implementation target:
+    - Add sync planner (preview diff, exclude patterns, overwrite policy) and execute as queued jobs.
+  - Acceptance criteria:
+    - Users can run repeatable folder sync with explicit preflight preview.
 
 ## P3 - Engineering Quality
 
-- [ ] Automated tests
-  - Problem: no test project currently present.
+- [ ] Automated integration tests against a disposable SFTP server
+  - Problem:
+    - Core transfer/security behaviors depend heavily on runtime conditions and are easy to regress.
   - Implementation target:
-    - Unit tests for path handling, conflict logic, and transfer orchestration.
-    - Integration tests for SFTP service behavior (mocked or test container).
+    - Add CI integration suite for connect, host-key trust, transfer queue, conflict handling, and cancellation cleanup.
   - Acceptance criteria:
-    - CI runs tests on every PR/commit.
-    - Core file operations have regression coverage.
-
-- [ ] CI quality gates
-  - Implementation target:
-    - Build + test + static analysis workflow.
-  - Acceptance criteria:
-    - Broken builds/tests block merges.
-    - Release artifacts are reproducible.
+    - Critical transfer and security paths are covered by repeatable automated tests.
 
 ## Tracking Notes
 

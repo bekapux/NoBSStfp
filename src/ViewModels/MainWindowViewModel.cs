@@ -118,17 +118,13 @@ public partial class MainWindowViewModel : ViewModelBase
         if (updatedProfile is not null)
         {
             var passwordToPersist =
-                updatedProfile.UsePrivateKey
-                    ? string.Empty
-                    : (!string.IsNullOrEmpty(updatedProfile.Password)
-                        ? updatedProfile.Password
-                        : existingSecrets.Password ?? string.Empty);
+                !string.IsNullOrEmpty(updatedProfile.Password)
+                    ? updatedProfile.Password
+                    : existingSecrets.Password ?? string.Empty;
             var keyPassphraseToPersist =
-                updatedProfile.UsePrivateKey
-                    ? (!string.IsNullOrEmpty(updatedProfile.PrivateKeyPassphrase)
-                        ? updatedProfile.PrivateKeyPassphrase
-                        : existingSecrets.PrivateKeyPassphrase ?? string.Empty)
-                    : string.Empty;
+                !string.IsNullOrEmpty(updatedProfile.PrivateKeyPassphrase)
+                    ? updatedProfile.PrivateKeyPassphrase
+                    : existingSecrets.PrivateKeyPassphrase ?? string.Empty;
             await _profileManager.SaveCredentialsAsync(updatedProfile.Id, passwordToPersist, keyPassphraseToPersist);
             updatedProfile.Password = string.Empty;
             updatedProfile.PrivateKeyPassphrase = string.Empty;
@@ -168,81 +164,64 @@ public partial class MainWindowViewModel : ViewModelBase
 
         var connectionProfile = CloneProfile(profile);
         connectionProfile.Username = credentials.Username;
-        connectionProfile.UsePrivateKey = credentials.UsePrivateKey;
-        connectionProfile.PrivateKeyPath = credentials.PrivateKeyPath;
+        connectionProfile.AuthPreferenceOrder =
+            AuthPreferenceOrder.Normalize(credentials.AuthPreferenceOrder, profile.UsePrivateKey);
+        connectionProfile.UsePrivateKey =
+            connectionProfile.AuthPreferenceOrder.Count > 0 &&
+            connectionProfile.AuthPreferenceOrder[0] == AuthMethodPreference.PrivateKey;
+        connectionProfile.PrivateKeyPath =
+            string.IsNullOrWhiteSpace(credentials.PrivateKeyPath)
+                ? profile.PrivateKeyPath
+                : credentials.PrivateKeyPath;
 
         var enteredPassword = credentials.Password ?? string.Empty;
         var enteredKeyPassphrase = credentials.PrivateKeyPassphrase ?? string.Empty;
-        var needsSavedSecret =
-            credentials.UsePrivateKey
-                ? string.IsNullOrEmpty(enteredKeyPassphrase)
-                : string.IsNullOrEmpty(enteredPassword);
+        connectionProfile.Password = enteredPassword;
+        connectionProfile.PrivateKeyPassphrase = enteredKeyPassphrase;
 
-        var savedSecrets = new CredentialSecrets();
-        if (needsSavedSecret)
+        var needsSavedPassword =
+            string.IsNullOrEmpty(enteredPassword) &&
+            connectionProfile.AuthPreferenceOrder.Contains(AuthMethodPreference.Password);
+        var needsSavedKeyPassphrase =
+            string.IsNullOrEmpty(enteredKeyPassphrase) &&
+            connectionProfile.AuthPreferenceOrder.Contains(AuthMethodPreference.PrivateKey) &&
+            !string.IsNullOrWhiteSpace(connectionProfile.PrivateKeyPath);
+
+        if (needsSavedPassword || needsSavedKeyPassphrase)
         {
             var verified = await _userVerificationService.VerifyForConnectionAsync(profile);
-            if (!verified)
-                return;
-
-            savedSecrets = await _profileManager.LoadCredentialsAsync(profile.Id) ?? new CredentialSecrets();
-        }
-
-        var shouldPersistSecrets = false;
-        var passwordToPersist = string.Empty;
-        var keyPassphraseToPersist = string.Empty;
-
-        if (credentials.UsePrivateKey)
-        {
-            connectionProfile.Password = string.Empty;
-            if (string.IsNullOrWhiteSpace(connectionProfile.PrivateKeyPath))
-                connectionProfile.PrivateKeyPath = profile.PrivateKeyPath;
-            if (string.IsNullOrWhiteSpace(connectionProfile.PrivateKeyPath))
+            if (verified)
             {
-                await _dialogService.ConfirmAsync("Missing Key Path",
-                    "Private key path is required for key authentication.");
-                return;
+                var savedSecrets = await _profileManager.LoadCredentialsAsync(profile.Id) ?? new CredentialSecrets();
+                if (string.IsNullOrEmpty(connectionProfile.Password))
+                    connectionProfile.Password = savedSecrets.Password ?? string.Empty;
+
+                if (string.IsNullOrEmpty(connectionProfile.PrivateKeyPassphrase))
+                    connectionProfile.PrivateKeyPassphrase = savedSecrets.PrivateKeyPassphrase ?? string.Empty;
             }
-
-            connectionProfile.PrivateKeyPassphrase =
-                !string.IsNullOrEmpty(enteredKeyPassphrase)
-                    ? enteredKeyPassphrase
-                    : (needsSavedSecret ? savedSecrets.PrivateKeyPassphrase ?? string.Empty : string.Empty);
-
-            passwordToPersist = string.Empty;
-            keyPassphraseToPersist = connectionProfile.PrivateKeyPassphrase;
-            shouldPersistSecrets = !string.IsNullOrEmpty(enteredKeyPassphrase);
-        }
-        else
-        {
-            connectionProfile.UsePrivateKey = false;
-            connectionProfile.PrivateKeyPath = string.Empty;
-            connectionProfile.PrivateKeyPassphrase = string.Empty;
-            connectionProfile.Password =
-                !string.IsNullOrEmpty(enteredPassword)
-                    ? enteredPassword
-                    : (needsSavedSecret ? savedSecrets.Password ?? string.Empty : string.Empty);
-
-            if (string.IsNullOrEmpty(connectionProfile.Password))
-            {
-                await _dialogService.ConfirmAsync("Missing Password",
-                    "No saved password found. Enter a password or enable key authentication.");
-                return;
-            }
-
-            passwordToPersist = connectionProfile.Password;
-            keyPassphraseToPersist = string.Empty;
-            shouldPersistSecrets = !string.IsNullOrEmpty(enteredPassword);
         }
 
         profile.Username = connectionProfile.Username;
         profile.UsePrivateKey = connectionProfile.UsePrivateKey;
+        profile.AuthPreferenceOrder = new List<AuthMethodPreference>(connectionProfile.AuthPreferenceOrder);
         profile.PrivateKeyPath = connectionProfile.PrivateKeyPath;
         profile.Password = string.Empty;
         profile.PrivateKeyPassphrase = string.Empty;
 
-        if (shouldPersistSecrets)
+        if (!string.IsNullOrEmpty(enteredPassword) || !string.IsNullOrEmpty(enteredKeyPassphrase))
+        {
+            var existingSecrets = await _profileManager.LoadCredentialsAsync(profile.Id) ?? new CredentialSecrets();
+            var passwordToPersist =
+                !string.IsNullOrEmpty(enteredPassword)
+                    ? enteredPassword
+                    : existingSecrets.Password ?? string.Empty;
+            var keyPassphraseToPersist =
+                !string.IsNullOrEmpty(enteredKeyPassphrase)
+                    ? enteredKeyPassphrase
+                    : existingSecrets.PrivateKeyPassphrase ?? string.Empty;
             await _profileManager.SaveCredentialsAsync(profile.Id, passwordToPersist, keyPassphraseToPersist);
+        }
+
         await SaveLibraryAsync();
         RefreshSessionSuggestions();
 
@@ -264,8 +243,14 @@ public partial class MainWindowViewModel : ViewModelBase
             Host = source.Host,
             Port = source.Port,
             Username = source.Username,
+            ConnectionTimeoutSeconds = source.ConnectionTimeoutSeconds,
+            KeepAliveIntervalSeconds = source.KeepAliveIntervalSeconds,
+            ReconnectStrategy = source.ReconnectStrategy,
+            ReconnectAttempts = source.ReconnectAttempts,
+            ReconnectDelaySeconds = source.ReconnectDelaySeconds,
             Password = source.Password,
             UsePrivateKey = source.UsePrivateKey,
+            AuthPreferenceOrder = AuthPreferenceOrder.Normalize(source.AuthPreferenceOrder, source.UsePrivateKey),
             PrivateKeyPath = source.PrivateKeyPath,
             PrivateKeyPassphrase = source.PrivateKeyPassphrase
         };

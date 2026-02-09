@@ -9,22 +9,33 @@
         x:DataType="vm:MainWindowViewModel"
         x:Name="Root"
         Icon="/Assets/icon.ico"
+        UseLayoutRounding="True"
         Title="{Binding AppTitle}">
 
     <NativeMenu.Menu>
         <NativeMenu>
             <NativeMenuItem Header="View">
                 <NativeMenu>
+                    <NativeMenuItem Header="Show Server Explorer"
+                                    ToggleType="CheckBox"
+                                    IsChecked="{Binding IsSidebarOpen, Mode=TwoWay}"
+                                    Click="OnShowServerExplorerMenuItemClick"
+                                    IsEnabled="True"/>
                     <NativeMenuItem Header="Show Transfer Queue"
                                     ToggleType="CheckBox"
                                     IsChecked="{Binding ShowTransferQueue, Mode=TwoWay}"
                                     Click="OnShowTransferQueueMenuItemClick"
                                     IsEnabled="True"/>
                     <NativeMenuItemSeparator />
+                    <NativeMenuItem Header="Lock Credential Session"
+                                    Click="OnLockCredentialSessionMenuItemClick"/>
                 </NativeMenu>
             </NativeMenuItem>
             <NativeMenuItem Header="Help">
                 <NativeMenu>
+                    <NativeMenuItem Header="Manage Trusted Host Keys..."
+                                    Click="OnManageTrustedHostKeysMenuItemClick"/>
+                    <NativeMenuItemSeparator />
                     <NativeMenuItem Header="About NoBSSftp"
                                     Click="OnAboutMenuItemClick"/>
                 </NativeMenu>
@@ -33,53 +44,81 @@
     </NativeMenu.Menu>
 
     <Window.Styles>
-        <Style Selector="Button.Flat">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="6"/>
-            <Setter Property="CornerRadius" Value="4"/>
+        <Style Selector="Border.SidebarToolbar">
+            <Setter Property="Background" Value="#151515"/>
+            <Setter Property="BorderBrush" Value="#2A2A2A"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="Padding" Value="0"/>
+        </Style>
+        <Style Selector="Button.SidebarTopButton">
+            <Setter Property="Background" Value="#1A1A1A"/>
+            <Setter Property="BorderBrush" Value="#2C2C2C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="CornerRadius" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="Button.SidebarTopButton:pointerover">
+            <Setter Property="Background" Value="#252525"/>
+            <Setter Property="BorderBrush" Value="#3B3B3B"/>
+        </Style>
+        <Style Selector="Button.SidebarTopButton:pressed">
+            <Setter Property="Background" Value="#2F2F2F"/>
+            <Setter Property="BorderBrush" Value="#4A4A4A"/>
+        </Style>
+        <Style Selector="Button.SidebarTopButton.Active">
+            <Setter Property="Background" Value="#23405A"/>
+            <Setter Property="BorderBrush" Value="#3F6E95"/>
+        </Style>
+        <Style Selector="Button.SidebarTopButton PathIcon.SidebarGlyph">
+            <Setter Property="Foreground" Value="#D4D8DD"/>
+        </Style>
+        <Style Selector="Button.SidebarTopButton:pointerover PathIcon.SidebarGlyph">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+        </Style>
+        <Style Selector="Button.SidebarTopButton.Active PathIcon.SidebarGlyph">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
         </Style>
         <Style Selector="Button.SidebarToggle">
             <Setter Property="Padding" Value="0"/>
             <Setter Property="Margin" Value="0"/>
             <Setter Property="CornerRadius" Value="0"/>
-            <Setter Property="Width" Value="22"/>
-            <Setter Property="Height" Value="22"/>
-            <Setter Property="MinWidth" Value="22"/>
-            <Setter Property="MinHeight" Value="22"/>
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="MinWidth" Value="30"/>
+            <Setter Property="MinHeight" Value="28"/>
         </Style>
-        <Style Selector="Button.SidebarToggle /template/ ContentPresenter">
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.14"/>
-                </Transitions>
-            </Setter>
+        <Style Selector="Button.SidebarAction">
+            <Setter Property="Width" Value="34"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="MinWidth" Value="34"/>
+            <Setter Property="Padding" Value="0"/>
         </Style>
-        <Style Selector="Button.SidebarToggle.Active /template/ ContentPresenter">
-            <Setter Property="Background" Value="#3A3A3A"/>
-        </Style>
-        <Style Selector="Button.SidebarToggle.Active TextBlock.IconGlyph">
-            <Setter Property="Foreground" Value="#EAF4FF"/>
-        </Style>
-        <Style Selector="Button.Flat:pointerover /template/ ContentPresenter">
-            <Setter Property="Background" Value="#FFBDBD"/> <!-- Light Red -->
-        </Style>
-        <Style Selector="Button.Flat:pointerover TextBlock.IconGlyph">
-            <Setter Property="Foreground" Value="#D50000"/> <!-- Darker Red Icon -->
+        <Style Selector="PathIcon.SidebarGlyph">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
         <Style Selector="ListBox.TabStripList">
-            <Setter Property="Background" Value="#141414"/>
-            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="#121212"/>
+            <Setter Property="BorderBrush" Value="#2A2A2A"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="Margin" Value="0"/>
         </Style>
         <Style Selector="ListBox.TabStripList > ListBoxItem">
-            <Setter Property="Margin" Value="1,0,0,0"/>
+            <Setter Property="Margin" Value="0"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="MinWidth" Value="0"/>
-            <Setter Property="Height" Value="34"/>
-            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -95,23 +134,34 @@
             <Setter Property="Background" Value="Transparent"/>
         </Style>
         <Style Selector="Border.TabHeader">
-            <Setter Property="Background" Value="#111111"/>
-            <Setter Property="BorderBrush" Value="#1F1F1F"/>
-            <Setter Property="BorderThickness" Value="1,0,1,0"/>
+            <Setter Property="Background" Value="#151515"/>
+            <Setter Property="BorderBrush" Value="#2C2C2C"/>
+            <Setter Property="BorderThickness" Value="0,0,1,0"/>
             <Setter Property="CornerRadius" Value="0"/>
             <Setter Property="Padding" Value="10 0 8 0"/>
-            <Setter Property="Height" Value="34"/>
-            <Setter Property="MinHeight" Value="34"/>
-            <Setter Property="MinWidth" Value="120"/>
-            <Setter Property="MaxWidth" Value="220"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="MinWidth" Value="126"/>
+            <Setter Property="MaxWidth" Value="240"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
         </Style>
         <Style Selector="ListBox.TabStripList > ListBoxItem:pointerover Border.TabHeader">
-            <Setter Property="Background" Value="#181818"/>
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="BorderBrush" Value="#3A3A3A"/>
         </Style>
         <Style Selector="ListBox.TabStripList > ListBoxItem:selected Border.TabHeader">
-            <Setter Property="Background" Value="#1E1E1E"/>
-            <Setter Property="BorderBrush" Value="#1E1E1E"/>
+            <Setter Property="Background" Value="#242424"/>
+            <Setter Property="BorderBrush" Value="#4B4B4B"/>
+        </Style>
+        <Style Selector="TextBlock.TabIconGlyph">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="LineHeight" Value="14"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="#97A5B6"/>
         </Style>
         <Style Selector="TextBlock.TabHeaderText">
             <Setter Property="Foreground" Value="#C8C8C8"/>
@@ -135,53 +185,57 @@
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="2"/>
+            <Setter Property="Padding" Value="0"/>
             <Setter Property="CornerRadius" Value="0"/>
-            <Setter Property="Height" Value="18"/>
-            <Setter Property="MinHeight" Value="18"/>
-            <Setter Property="Width" Value="18"/>
-            <Setter Property="MinWidth" Value="18"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="MinHeight" Value="20"/>
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="MinWidth" Value="20"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Opacity" Value="0"/>
+            <Setter Property="Opacity" Value="0.55"/>
         </Style>
-        <Style Selector="Button.TabClose TextBlock.IconGlyph">
-            <Setter Property="Foreground" Value="#B8B8B8"/>
+        <Style Selector="Button.TabClose TextBlock.TabIconGlyph">
+            <Setter Property="Foreground" Value="#AEB5BD"/>
         </Style>
         <Style Selector="ListBox.TabStripList > ListBoxItem:selected Button.TabClose">
-            <Setter Property="Opacity" Value="0.75"/>
+            <Setter Property="Opacity" Value="0.85"/>
         </Style>
         <Style Selector="ListBox.TabStripList > ListBoxItem:pointerover Button.TabClose">
             <Setter Property="Opacity" Value="1"/>
         </Style>
         <Style Selector="Button.TabClose:pointerover">
-            <Setter Property="Background" Value="#3E3E42"/>
+            <Setter Property="Background" Value="#3B3B3B"/>
         </Style>
-        <Style Selector="Button.TabClose:pointerover TextBlock.IconGlyph">
+        <Style Selector="Button.TabClose:pointerover TextBlock.TabIconGlyph">
             <Setter Property="Foreground" Value="#FFFFFF"/>
         </Style>
         <Style Selector="Button.AddTab">
-            <Setter Property="Background" Value="#111111"/>
-            <Setter Property="BorderBrush" Value="#1F1F1F"/>
-            <Setter Property="BorderThickness" Value="1,0,1,0"/>
+            <Setter Property="Background" Value="#151515"/>
+            <Setter Property="BorderBrush" Value="#2C2C2C"/>
+            <Setter Property="BorderThickness" Value="0,0,1,0"/>
             <Setter Property="CornerRadius" Value="0"/>
             <Setter Property="Padding" Value="0"/>
-            <Setter Property="Height" Value="34"/>
-            <Setter Property="MinHeight" Value="34"/>
-            <Setter Property="Width" Value="34"/>
-            <Setter Property="MinWidth" Value="34"/>
-            <Setter Property="MaxWidth" Value="34"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Width" Value="32"/>
+            <Setter Property="MinWidth" Value="32"/>
+            <Setter Property="MaxWidth" Value="32"/>
             <Setter Property="Margin" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="HorizontalAlignment" Value="Left"/>
         </Style>
         <Style Selector="Button.AddTab:pointerover">
-            <Setter Property="Background" Value="#181818"/>
+            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="BorderBrush" Value="#3A3A3A"/>
         </Style>
         <Style Selector="Button.AddTab:pressed">
-            <Setter Property="Background" Value="#1E1E1E"/>
+            <Setter Property="Background" Value="#2A2A2A"/>
+            <Setter Property="BorderBrush" Value="#4A4A4A"/>
         </Style>
-        <Style Selector="Button.AddTab TextBlock.IconGlyph">
+        <Style Selector="Button.AddTab TextBlock.TabIconGlyph">
             <Setter Property="Foreground" Value="#C8C8C8"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="LineHeight" Value="16"/>
         </Style>
         <Style Selector="ListBox.ServerList > ListBoxItem">
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -261,26 +315,36 @@
     <Grid RowDefinitions="Auto, *">
       
       <SplitView Grid.Row="1" DisplayMode="CompactInline" IsPaneOpen="{Binding IsSidebarOpen}"
-                 OpenPaneLength="250" CompactPaneLength="24">
+                 OpenPaneLength="250" CompactPaneLength="30">
         <SplitView.Pane>
             <Grid RowDefinitions="Auto,*,Auto">
                 <!-- Sidebar Header -->
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="0" Margin="1" Height="22" VerticalAlignment="Top">
-                    <Button Command="{Binding ToggleSidebarCommand}" Classes="Flat SidebarToggle"
+                <Border Grid.Row="0" Classes="SidebarToolbar">
+                <StackPanel Orientation="Horizontal" Spacing="0" Margin="0" Height="28" VerticalAlignment="Top">
+                    <Button Command="{Binding ToggleSidebarCommand}"
+                            ToolTip.Tip="Toggle Sidebar"
+                            Classes="SidebarTopButton SidebarToggle"
                             Classes.Active="{Binding #Root.DataContext.IsSidebarOpen}">
-                        <TextBlock Classes="IconGlyph" Text="☰" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
+                        <PathIcon Classes="SidebarGlyph"
+                                  Data="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/>
                     </Button>
-                    <Button Command="{Binding AddServerCommand}" Width="40" ToolTip.Tip="Add Server"
-                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat" Height="22" MinHeight="22" Padding="0">
-                        <TextBlock Classes="IconGlyph" Text="➕" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
+                    <Button Command="{Binding AddServerCommand}" ToolTip.Tip="Add Server"
+                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="SidebarTopButton SidebarAction">
+                        <PathIcon Classes="SidebarGlyph"
+                                  Data="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
                     </Button>
-                    <Button Command="{Binding AddFolderCommand}" Width="40" ToolTip.Tip="Add Folder"
-                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="Flat" Height="22" MinHeight="22" Padding="0">
-                        <TextBlock Classes="IconGlyph" Text="📁" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center"/>
+                    <Button Command="{Binding AddFolderCommand}" ToolTip.Tip="Add Folder"
+                            IsVisible="{Binding #Root.DataContext.IsSidebarOpen}" Classes="SidebarTopButton SidebarAction">
+                        <PathIcon Classes="SidebarGlyph"
+                                  Data="M10,4L12,6H20A2,2 0 0 1 22,8V18A2,2 0 0 1 20,20H4A2,2 0 0 1 2,18V6A2,2 0 0 1 4,4H10Z"/>
                     </Button>
-                    <TextBlock Text="Servers" VerticalAlignment="Center" FontWeight="Bold" 
+                    <TextBlock Text="Servers"
+                               Margin="8,0,0,0"
+                               VerticalAlignment="Center"
+                               FontWeight="Bold"
                                IsVisible="{Binding #Root.DataContext.IsSidebarOpen}"/>
                 </StackPanel>
+                </Border>
                 
                 <!-- Server List -->
                 <StackPanel Grid.Row="1"
@@ -443,14 +507,9 @@
                                                   ColumnSpacing="6"
                                                   VerticalAlignment="Center"
                                                   HorizontalAlignment="Stretch">
-                                                <TextBlock Classes="IconGlyph"
+                                                <TextBlock Classes="TabIconGlyph"
                                                            Grid.Column="0"
-                                                           Text="🖥️"
-                                                           Width="16"
-                                                           Height="16"
-                                                           Foreground="#8D9DB1"
-                                                           VerticalAlignment="Center"
-                                                           TextAlignment="Center"/>
+                                                           Text="▣"/>
                                                 <TextBlock Classes="TabHeaderText"
                                                            Grid.Column="1"
                                                            Text="{Binding Header}"
@@ -464,7 +523,7 @@
                                                         HorizontalAlignment="Right"
                                                         VerticalAlignment="Center"
                                                         ToolTip.Tip="Close Tab">
-                                                    <TextBlock Classes="IconGlyph" Text="✖️" Width="14" Height="14" TextAlignment="Center"/>
+                                                    <TextBlock Classes="TabIconGlyph" Text="✕"/>
                                                 </Button>
                                             </Grid>
                                         </Border>
@@ -473,7 +532,7 @@
                                         <Button Classes="AddTab"
                                                 Command="{Binding #Root.DataContext.AddTabCommand}"
                                                 ToolTip.Tip="New Server">
-                                            <TextBlock Classes="IconGlyph" Text="➕" Width="16" Height="16" TextAlignment="Center"/>
+                                            <TextBlock Classes="TabIconGlyph" Text="+"/>
                                         </Button>
                                     </DataTemplate>
                                 </ContentControl.DataTemplates>

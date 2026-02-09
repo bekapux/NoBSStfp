@@ -14,6 +14,9 @@ namespace NoBSSftp.Services;
 public interface IHostKeyTrustService
 {
     bool IsTrustedHostKey(ServerProfile profile, HostKeyEventArgs args);
+    IReadOnlyList<TrustedHostKeyEntry> GetTrustedHostKeys();
+    bool RemoveTrustedHostKey(TrustedHostKeyEntry entry);
+    void ClearTrustedHostKeys();
 }
 
 public class HostKeyTrustService : IHostKeyTrustService
@@ -105,6 +108,54 @@ public class HostKeyTrustService : IHostKeyTrustService
         }
     }
 
+    public IReadOnlyList<TrustedHostKeyEntry> GetTrustedHostKeys()
+    {
+        lock (_gate)
+        {
+            return LoadTrustedKeys()
+                .OrderBy(e => e.Host, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(e => e.Port)
+                .ThenBy(e => e.KeyAlgorithm, StringComparer.Ordinal)
+                .Select(CloneEntry)
+                .ToList();
+        }
+    }
+
+    public bool RemoveTrustedHostKey(TrustedHostKeyEntry entry)
+    {
+        var host = NormalizeHost(entry.Host);
+        if (string.IsNullOrWhiteSpace(host))
+            return false;
+
+        var algorithm = (entry.KeyAlgorithm ?? string.Empty).Trim();
+        if (algorithm.Length == 0)
+            return false;
+
+        lock (_gate)
+        {
+            var entries = LoadTrustedKeys();
+            var removed = entries.RemoveAll(
+                existing =>
+                    existing.Port == entry.Port &&
+                    existing.Host.Equals(host, StringComparison.OrdinalIgnoreCase) &&
+                    existing.KeyAlgorithm.Equals(algorithm, StringComparison.Ordinal)) > 0;
+
+            if (!removed)
+                return false;
+
+            SaveTrustedKeys(entries);
+            return true;
+        }
+    }
+
+    public void ClearTrustedHostKeys()
+    {
+        lock (_gate)
+        {
+            SaveTrustedKeys([]);
+        }
+    }
+
     private bool PromptForFirstSeenHost(string host,
         int port,
         string algorithm,
@@ -180,6 +231,18 @@ public class HostKeyTrustService : IHostKeyTrustService
             LoggingService.Warn($"Failed to load trusted host key store. {ex.Message}");
             return [];
         }
+    }
+
+    private static TrustedHostKeyEntry CloneEntry(TrustedHostKeyEntry source)
+    {
+        return new TrustedHostKeyEntry
+        {
+            Host = source.Host,
+            Port = source.Port,
+            KeyAlgorithm = source.KeyAlgorithm,
+            FingerprintSha256 = source.FingerprintSha256,
+            TrustedAtUtc = source.TrustedAtUtc
+        };
     }
 
     private void SaveTrustedKeys(List<TrustedHostKeyEntry> entries)

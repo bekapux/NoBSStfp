@@ -70,27 +70,56 @@ public class ProfileManager : IProfileManager
         await File.WriteAllTextAsync(_filePath, json);
     }
 
-    public Task<CredentialSecrets?> LoadCredentialsAsync(string profileId)
+    public async Task<CredentialSecrets?> LoadCredentialsAsync(string profileId)
     {
-        return _secureCredentialStore.LoadAsync(profileId);
+        if (CredentialUnlockSession.TryGetSecrets(profileId, out var cached))
+            return cached;
+
+        var secrets = await _secureCredentialStore.LoadAsync(profileId);
+        if (secrets is not null && CredentialUnlockSession.IsActive)
+            CredentialUnlockSession.CacheSecrets(profileId, secrets);
+
+        return secrets;
     }
 
     public async Task SaveCredentialsAsync(string profileId,
         string password,
         string privateKeyPassphrase)
     {
+        var normalizedPassword = password ?? string.Empty;
+        var normalizedKeyPassphrase = privateKeyPassphrase ?? string.Empty;
+
         await _secureCredentialStore.SaveAsync(
             profileId,
             new CredentialSecrets
             {
-                Password = password ?? string.Empty,
-                PrivateKeyPassphrase = privateKeyPassphrase ?? string.Empty
+                Password = normalizedPassword,
+                PrivateKeyPassphrase = normalizedKeyPassphrase
             });
+
+        if (CredentialUnlockSession.IsActive)
+        {
+            if (normalizedPassword.Length == 0 && normalizedKeyPassphrase.Length == 0)
+            {
+                CredentialUnlockSession.RemoveSecrets(profileId);
+            }
+            else
+            {
+                CredentialUnlockSession.CacheSecrets(
+                    profileId,
+                    new CredentialSecrets
+                    {
+                        Password = normalizedPassword,
+                        PrivateKeyPassphrase = normalizedKeyPassphrase
+                    });
+            }
+        }
     }
 
-    public Task DeleteCredentialsAsync(string profileId)
+    public async Task DeleteCredentialsAsync(string profileId)
     {
-        return _secureCredentialStore.DeleteAsync(profileId);
+        await _secureCredentialStore.DeleteAsync(profileId);
+        CredentialUnlockSession.RemoveSecrets(profileId);
     }
 
     private static ServerLibrary CreateSanitizedLibrary(ServerLibrary source)
@@ -120,7 +149,13 @@ public class ProfileManager : IProfileManager
             Host = profile.Host,
             Port = profile.Port,
             Username = profile.Username,
+            ConnectionTimeoutSeconds = profile.ConnectionTimeoutSeconds,
+            KeepAliveIntervalSeconds = profile.KeepAliveIntervalSeconds,
+            ReconnectStrategy = profile.ReconnectStrategy,
+            ReconnectAttempts = profile.ReconnectAttempts,
+            ReconnectDelaySeconds = profile.ReconnectDelaySeconds,
             UsePrivateKey = profile.UsePrivateKey,
+            AuthPreferenceOrder = AuthPreferenceOrder.Normalize(profile.AuthPreferenceOrder, profile.UsePrivateKey),
             PrivateKeyPath = profile.PrivateKeyPath,
             PrivateKeyPassphrase = string.Empty,
             Password = string.Empty

@@ -1,12 +1,15 @@
 using System;
+using System.Collections.ObjectModel;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.VisualTree;
 using NoBSSftp.Models;
+using NoBSSftp.Services;
 using NoBSSftp.ViewModels;
 
 namespace NoBSSftp.Views;
@@ -31,6 +34,272 @@ public partial class MainWindow : Window
         AddHandler(PointerPressedEvent, OnServerItemPointerPressed, RoutingStrategies.Tunnel);
         AddHandler(PointerMovedEvent, OnServerItemPointerMoved, RoutingStrategies.Tunnel);
         AddHandler(PointerReleasedEvent, OnServerItemPointerReleased, RoutingStrategies.Tunnel);
+    }
+
+    private async void OnManageTrustedHostKeysMenuItemClick(object? sender,
+        EventArgs e)
+    {
+        var hostKeyTrustService = new HostKeyTrustService();
+        var dialogService = new DialogService();
+        var rows = new ObservableCollection<TrustedHostKeyRow>();
+
+        var dialog =
+            new Window
+            {
+                Title = "Trusted Host Keys",
+                Width = 1060,
+                MinWidth = 860,
+                Height = 520,
+                MinHeight = 420,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                SystemDecorations = SystemDecorations.BorderOnly
+            };
+
+        var description =
+            new TextBlock
+            {
+                Text =
+                    "Review trusted SSH host keys. Removing an entry forces re-verification on the next connection.",
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            };
+
+        var keyList =
+            new ListBox
+            {
+                ItemsSource = rows,
+                SelectionMode = SelectionMode.Single
+            };
+
+        static TextBlock MakeCell(string value)
+        {
+            return new TextBlock
+            {
+                Text = value,
+                TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+
+        static void AddHeader(Grid grid,
+            string text,
+            int column)
+        {
+            var headerCell =
+                new TextBlock
+                {
+                    Text = text,
+                    FontWeight = Avalonia.Media.FontWeight.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            Grid.SetColumn(headerCell, column);
+            grid.Children.Add(headerCell);
+        }
+
+        keyList.ItemTemplate = new FuncDataTemplate<TrustedHostKeyRow>(
+            (item, _) =>
+            {
+                var rowGrid =
+                    new Grid
+                    {
+                        ColumnDefinitions = new ColumnDefinitions("1.1*,90,160,2.6*,190"),
+                        ColumnSpacing = 10,
+                        Margin = new Thickness(8, 6)
+                    };
+
+                var host = MakeCell(item.Host);
+                var port = MakeCell(item.Port.ToString());
+                var algorithm = MakeCell(item.KeyAlgorithm);
+                var fingerprint = MakeCell(item.FingerprintSha256);
+                var firstSeen = MakeCell(item.FirstSeen);
+
+                Grid.SetColumn(host, 0);
+                Grid.SetColumn(port, 1);
+                Grid.SetColumn(algorithm, 2);
+                Grid.SetColumn(fingerprint, 3);
+                Grid.SetColumn(firstSeen, 4);
+
+                rowGrid.Children.Add(host);
+                rowGrid.Children.Add(port);
+                rowGrid.Children.Add(algorithm);
+                rowGrid.Children.Add(fingerprint);
+                rowGrid.Children.Add(firstSeen);
+                return rowGrid;
+            },
+            supportsRecycling: true);
+
+        var headerGrid =
+            new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("1.1*,90,160,2.6*,190"),
+                ColumnSpacing = 10,
+                Margin = new Thickness(8, 6)
+            };
+        AddHeader(headerGrid, "Host", 0);
+        AddHeader(headerGrid, "Port", 1);
+        AddHeader(headerGrid, "Algorithm", 2);
+        AddHeader(headerGrid, "Fingerprint (SHA256)", 3);
+        AddHeader(headerGrid, "First Seen", 4);
+
+        var headerBorder =
+            new Border
+            {
+                BorderThickness = new Thickness(1),
+                BorderBrush = Avalonia.Media.Brushes.DimGray,
+                Child = headerGrid
+            };
+
+        var listBorder =
+            new Border
+            {
+                BorderThickness = new Thickness(1, 0, 1, 1),
+                BorderBrush = Avalonia.Media.Brushes.DimGray,
+                Child = keyList
+            };
+
+        var tableLayout =
+            new Grid
+            {
+                RowDefinitions = new RowDefinitions("Auto,*")
+            };
+        Grid.SetRow(headerBorder, 0);
+        Grid.SetRow(listBorder, 1);
+        tableLayout.Children.Add(headerBorder);
+        tableLayout.Children.Add(listBorder);
+
+        var statusBlock =
+            new TextBlock
+            {
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                Opacity = 0.85
+            };
+
+        var refreshButton = new Button { Content = "Refresh" };
+        var removeSelectedButton = new Button { Content = "Remove Selected", IsEnabled = false };
+        var clearAllButton = new Button { Content = "Clear All" };
+        var closeButton =
+            new Button
+            {
+                Content = "Close",
+                IsDefault = true
+            };
+
+        void ReloadRows(string? message = null)
+        {
+            rows.Clear();
+            foreach (var entry in hostKeyTrustService.GetTrustedHostKeys())
+            {
+                rows.Add(new TrustedHostKeyRow(entry));
+            }
+
+            keyList.SelectedItem = null;
+            removeSelectedButton.IsEnabled = false;
+
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                statusBlock.Text = message;
+                return;
+            }
+
+            statusBlock.Text =
+                rows.Count == 0
+                    ? "No trusted host keys found."
+                    : $"Showing {rows.Count} trusted host key {(rows.Count == 1 ? "entry" : "entries")}.";
+        }
+
+        keyList.SelectionChanged += (_, _) => { removeSelectedButton.IsEnabled = keyList.SelectedItem is TrustedHostKeyRow; };
+
+        refreshButton.Click += (_, _) => { ReloadRows(); };
+
+        removeSelectedButton.Click += async (_, _) =>
+        {
+            if (keyList.SelectedItem is not TrustedHostKeyRow selected)
+                return;
+
+            var confirmed =
+                await dialogService.ConfirmAsync(
+                    "Remove Trusted Host Key",
+                    $"Remove trusted key for {selected.Host}:{selected.Port} ({selected.KeyAlgorithm})?\n\n" +
+                    "This host will require verification again on next connect.");
+            if (!confirmed)
+                return;
+
+            if (!hostKeyTrustService.RemoveTrustedHostKey(selected.Entry))
+            {
+                ReloadRows("Failed to remove trusted host key entry.");
+                return;
+            }
+
+            ReloadRows($"Removed trusted key for {selected.Host}:{selected.Port}.");
+        };
+
+        clearAllButton.Click += async (_, _) =>
+        {
+            if (rows.Count == 0)
+            {
+                statusBlock.Text = "No trusted host keys to clear.";
+                return;
+            }
+
+            var confirmed =
+                await dialogService.ConfirmAsync(
+                    "Clear Trusted Host Keys",
+                    "Clear all trusted host keys?\n\nAll hosts will require verification on next connect.");
+            if (!confirmed)
+                return;
+
+            hostKeyTrustService.ClearTrustedHostKeys();
+            ReloadRows("Cleared all trusted host keys.");
+        };
+
+        closeButton.Click += (_, _) => { dialog.Close(); };
+
+        var actions =
+            new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+        actions.Children.Add(refreshButton);
+        actions.Children.Add(removeSelectedButton);
+        actions.Children.Add(clearAllButton);
+
+        var footer =
+            new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+        footer.Children.Add(closeButton);
+
+        var layout =
+            new Grid
+            {
+                Margin = new Thickness(14),
+                RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"),
+                RowSpacing = 10
+            };
+        Grid.SetRow(description, 0);
+        Grid.SetRow(tableLayout, 1);
+        Grid.SetRow(statusBlock, 2);
+        Grid.SetRow(actions, 3);
+        layout.Children.Add(description);
+        layout.Children.Add(tableLayout);
+        layout.Children.Add(statusBlock);
+        layout.Children.Add(actions);
+
+        var root =
+            new DockPanel
+            {
+                LastChildFill = true
+            };
+        DockPanel.SetDock(footer, Dock.Bottom);
+        root.Children.Add(footer);
+        root.Children.Add(layout);
+        dialog.Content = root;
+
+        ReloadRows();
+        await dialog.ShowDialog(this);
     }
 
     private async void OnAboutMenuItemClick(object? sender,
@@ -85,6 +354,28 @@ public partial class MainWindow : Window
 
         if (sender is NativeMenuItem item)
             item.IsChecked = vm.ShowTransferQueue;
+    }
+
+    private void OnShowServerExplorerMenuItemClick(object? sender,
+        EventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm)
+            return;
+
+        vm.IsSidebarOpen = !vm.IsSidebarOpen;
+
+        if (sender is NativeMenuItem item)
+            item.IsChecked = vm.IsSidebarOpen;
+    }
+
+    private void OnLockCredentialSessionMenuItemClick(object? sender,
+        EventArgs e)
+    {
+        CredentialUnlockSession.Invalidate();
+        LoggingService.Info("Credential unlock session locked by user.");
+
+        if (DataContext is MainWindowViewModel { SelectedTabItem: SessionViewModel session })
+            session.StatusMessage = "Credential session locked";
     }
 
     private void OnServerListDoubleTapped(object? sender,
@@ -543,5 +834,17 @@ public partial class MainWindow : Window
         }
 
         return null;
+    }
+
+    private sealed class TrustedHostKeyRow(TrustedHostKeyEntry entry)
+    {
+        public TrustedHostKeyEntry Entry { get; } = entry;
+        public string Host { get; } = entry.Host;
+        public int Port { get; } = entry.Port;
+        public string KeyAlgorithm { get; } = entry.KeyAlgorithm;
+        public string FingerprintSha256 { get; } = entry.FingerprintSha256;
+        public string FirstSeen { get; } = entry.TrustedAtUtc == default
+            ? "-"
+            : entry.TrustedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
     }
 }

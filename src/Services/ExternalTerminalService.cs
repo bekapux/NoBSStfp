@@ -65,8 +65,8 @@ public static class ExternalTerminalService
     private static string BuildMacCommand(ServerProfile profile)
     {
         var needsAutomation =
-            (!profile.UsePrivateKey && !string.IsNullOrEmpty(profile.Password)) ||
-            (profile.UsePrivateKey && !string.IsNullOrEmpty(profile.PrivateKeyPassphrase));
+            !string.IsNullOrEmpty(profile.Password) ||
+            !string.IsNullOrEmpty(profile.PrivateKeyPassphrase);
 
         if (!needsAutomation)
             return BuildSshShellCommand(profile);
@@ -173,45 +173,87 @@ public static class ExternalTerminalService
             args.Add(profile.Port.ToString(CultureInfo.InvariantCulture));
         }
 
-        if (profile.UsePrivateKey)
-        {
-            var hasExplicitKeyPath = !string.IsNullOrWhiteSpace(profile.PrivateKeyPath);
-            if (!string.IsNullOrWhiteSpace(profile.PrivateKeyPath))
-            {
-                var normalizedKeyPath = NormalizeAndValidatePrivateKeyPath(profile.PrivateKeyPath);
-                args.Add("-i");
-                args.Add(normalizedKeyPath);
-            }
+        var authOrder = AuthPreferenceOrder.Normalize(profile.AuthPreferenceOrder, profile.UsePrivateKey);
+        var supportsAgent = authOrder.Contains(AuthMethodPreference.Agent);
+        var supportsPrivateKey = authOrder.Contains(AuthMethodPreference.PrivateKey);
+        var supportsPassword = authOrder.Contains(AuthMethodPreference.Password);
 
-            if (hasExplicitKeyPath)
+        if (supportsPrivateKey && !string.IsNullOrWhiteSpace(profile.PrivateKeyPath))
+        {
+            var normalizedKeyPath = NormalizeAndValidatePrivateKeyPath(profile.PrivateKeyPath);
+            args.Add("-i");
+            args.Add(normalizedKeyPath);
+
+            if (!supportsAgent)
             {
-                // Avoid agent/default identities overshadowing the explicit key.
+                // Without agent fallback, force the explicit identity file only.
                 args.Add("-o");
                 args.Add("IdentitiesOnly=yes");
             }
+        }
 
+        args.Add("-o");
+        args.Add($"PreferredAuthentications={BuildPreferredAuthentications(authOrder)}");
+
+        args.Add("-o");
+        args.Add(supportsAgent || supportsPrivateKey ? "PubkeyAuthentication=yes" : "PubkeyAuthentication=no");
+
+        if (supportsAgent || supportsPrivateKey)
+        {
             args.Add("-o");
-            args.Add("PreferredAuthentications=publickey");
-            args.Add("-o");
-            args.Add("PubkeyAuthentication=yes");
-            // Never fall back to password prompts for key-only profile.
+            args.Add("PubkeyAcceptedAlgorithms=+ssh-rsa");
+        }
+
+        if (!supportsPassword)
+        {
             args.Add("-o");
             args.Add("PasswordAuthentication=no");
             args.Add("-o");
             args.Add("KbdInteractiveAuthentication=no");
-            // Compatibility for older SSH servers that only accept legacy RSA signatures.
-            args.Add("-o");
-            args.Add("PubkeyAcceptedAlgorithms=+ssh-rsa");
             return;
         }
 
-        // Password flow: do not let ssh try local private keys first.
-        args.Add("-o");
-        args.Add("PubkeyAuthentication=no");
-        args.Add("-o");
-        args.Add("PreferredAuthentications=password,keyboard-interactive");
         args.Add("-o");
         args.Add("KbdInteractiveAuthentication=yes");
+    }
+
+    private static string BuildPreferredAuthentications(IReadOnlyList<AuthMethodPreference> authOrder)
+    {
+        var preferred = new List<string>(3);
+        var hasPublicKey = false;
+
+        foreach (var authMethod in authOrder)
+        {
+            switch (authMethod)
+            {
+                case AuthMethodPreference.Agent:
+                case AuthMethodPreference.PrivateKey:
+                    if (!hasPublicKey)
+                    {
+                        preferred.Add("publickey");
+                        hasPublicKey = true;
+                    }
+
+                    break;
+                case AuthMethodPreference.Password:
+                    preferred.Add("password");
+                    preferred.Add("keyboard-interactive");
+                    break;
+            }
+        }
+
+        if (preferred.Count == 0)
+            return "publickey,password,keyboard-interactive";
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var deduplicated = new List<string>(preferred.Count);
+        foreach (var method in preferred)
+        {
+            if (seen.Add(method))
+                deduplicated.Add(method);
+        }
+
+        return string.Join(',', deduplicated);
     }
 
     private static bool ShouldSuppressDuplicateLaunch()

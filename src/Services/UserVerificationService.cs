@@ -17,6 +17,9 @@ public sealed class UserVerificationService : IUserVerificationService
         if (!OperatingSystem.IsMacOS())
             return true;
 
+        if (CredentialUnlockSession.IsActive)
+            return true;
+
         try
         {
             var reason = BuildReason(profile);
@@ -24,7 +27,10 @@ public sealed class UserVerificationService : IUserVerificationService
             var verdict = stdOut.Trim();
 
             if (exitCode == 0 && verdict.Equals("OK", StringComparison.Ordinal))
+            {
+                CredentialUnlockSession.Activate();
                 return true;
+            }
 
             if (verdict.Equals("UNAVAILABLE", StringComparison.Ordinal))
                 LoggingService.Warn($"User verification unavailable: {stdErr.Trim()}");

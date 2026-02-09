@@ -3,20 +3,28 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
+using System.Security.Cryptography;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using NoBSSftp.Models;
 using NoBSSftp.Services;
 using System.Threading;
-using System.IO;
+using System.Threading.Tasks;
 
 namespace NoBSSftp.ViewModels;
 
 public partial class SessionViewModel : ViewModelBase
 {
     private const int TransferRetryAttempts = 3;
+    private const long HashVerificationThresholdBytes = 64L * 1024 * 1024;
+    private const int RecursiveSearchDirectoryLimit = 10000;
+    private const int RecursiveSearchDebounceMs = 300;
+    private const string ExplorerViewListOption = "📄 List";
+    private const string ExplorerViewTreeOption = "🌳 Tree";
+    private const string AtomicUploadTempPrefix = ".nobssftp-upload";
+    private static readonly TimeSpan VerificationTimestampTolerance = TimeSpan.FromMinutes(2);
 
     private readonly ISftpService _sftpService;
     private readonly IDialogService _dialogService;
@@ -25,6 +33,9 @@ public partial class SessionViewModel : ViewModelBase
     private CancellationTokenSource? _transferCts;
     private readonly Queue<QueuedTransfer> _transferQueue = new();
     private readonly Dictionary<Guid, Func<TransferWorkDefinition>> _retryFactories = new();
+    private CancellationTokenSource? _searchCts;
+    private CancellationTokenSource? _treeLoadCts;
+    private int _searchRevision;
     private bool _isProcessingTransferQueue;
     private DateTime _lastExternalTerminalLaunchUtc = DateTime.MinValue;
     private DateTime _lastSuggestionConnectUtc = DateTime.MinValue;
@@ -70,16 +81,43 @@ public partial class SessionViewModel : ViewModelBase
     private bool _showTransferQueue = true;
 
     [ObservableProperty]
+    private bool _verifyTransfersAfterTransfer;
+
+    [ObservableProperty]
+    private bool _isTreeView;
+
+    [ObservableProperty]
+    private bool _isTreeLoading;
+
+    [ObservableProperty]
+    private string _selectedExplorerView = ExplorerViewListOption;
+
+    [ObservableProperty]
+    private string _searchQuery = string.Empty;
+
+    [ObservableProperty]
+    private bool _searchRecursive;
+
+    [ObservableProperty]
+    private bool _isSearchInProgress;
+
+    [ObservableProperty]
     private int _connectFailureFocusRequestId;
 
     [ObservableProperty]
     private TransferJob? _selectedTransferJob;
+
+    [ObservableProperty]
+    private RemoteTreeNode? _selectedTreeNode;
 
     private class ClipboardItem
     {
         public string Path { get; init; } = string.Empty;
         public string Name { get; init; } = string.Empty;
         public bool IsDirectory { get; init; }
+        public bool IsSymbolicLink { get; init; }
+        public string SymbolicLinkTarget { get; set; } = string.Empty;
+        public bool SymbolicLinkTargetIsDirectory { get; set; }
         public long Size { get; init; }
         public DateTime LastWriteTime { get; init; }
     }
@@ -88,6 +126,7 @@ public partial class SessionViewModel : ViewModelBase
     {
         public string LocalPath { get; init; } = string.Empty;
         public string RemotePath { get; set; } = string.Empty;
+        public string? AtomicTempRemotePath { get; set; }
         public string DisplayName { get; init; } = string.Empty;
         public long Size { get; init; }
     }
@@ -127,10 +166,26 @@ public partial class SessionViewModel : ViewModelBase
         public bool IsDirectory { get; init; }
     }
 
+    private sealed class AttributeApplyTarget
+    {
+        public string RemotePath { get; init; } = string.Empty;
+        public string DisplayName { get; init; } = string.Empty;
+        public bool IsDirectory { get; init; }
+    }
+
+    private enum VerificationMode
+    {
+        Hash,
+        SizeAndTimeFallback
+    }
+
     private sealed class DeleteTargetSnapshot
     {
         public string Name { get; init; } = string.Empty;
+        public string RemotePath { get; init; } = "/";
         public bool IsDirectory { get; init; }
+        public bool IsSymbolicLink { get; init; }
+        public bool FollowSymlinkTarget { get; init; }
     }
 
     private sealed class DeleteJobRequest
@@ -172,15 +227,58 @@ public partial class SessionViewModel : ViewModelBase
 
     private List<ClipboardItem> _clipboardItems = new();
     private bool _clipboardIsCut;
+    private List<FileEntry> _recursiveSearchResults = [];
 
     partial void OnShowHiddenFilesChanged(bool value)
     {
-        ApplyFileFilter();
+        _ = RefreshSearchResultsAsync(debounce: false);
+        if (IsTreeView)
+            RebuildTreeRootFromCurrentList();
+    }
+
+    partial void OnSearchQueryChanged(string value)
+    {
+        _ = RefreshSearchResultsAsync(debounce: true);
+    }
+
+    partial void OnSearchRecursiveChanged(bool value)
+    {
+        _ = RefreshSearchResultsAsync(debounce: false);
+    }
+
+    partial void OnSelectedExplorerViewChanged(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        IsTreeView = IsTreeExplorerOption(value);
+    }
+
+    partial void OnIsTreeViewChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsListView));
+        var expected = value ? ExplorerViewTreeOption : ExplorerViewListOption;
+        if (!string.Equals(SelectedExplorerView, expected, StringComparison.Ordinal))
+            SelectedExplorerView = expected;
+        if (value)
+            SelectedFiles = null;
+        if (value)
+            RebuildTreeRootFromCurrentList();
+    }
+
+    partial void OnSelectedTreeNodeChanged(RemoteTreeNode? value)
+    {
+        if (value is null || value.IsPlaceholder)
+            return;
+
+        SelectedFiles = null;
+        SelectedFile = value.Entry;
     }
 
     public event Action<SessionViewModel>? CloseRequested;
 
     public ObservableCollection<FileEntry> Files { get; } = [];
+    public ObservableCollection<RemoteTreeNode> TreeItems { get; } = [];
     public ObservableCollection<TransferJob> TransferJobs { get; } = [];
 
     public bool HasTransferJobs => TransferJobs.Count > 0;
@@ -188,6 +286,14 @@ public partial class SessionViewModel : ViewModelBase
     public bool HasRetryableTransfers => TransferJobs.Any(job => job.IsRetryable);
 
     public bool IsTransferQueueVisible => ShowTransferQueue;
+
+    public bool IsListView => !IsTreeView;
+
+    public ObservableCollection<string> ExplorerViewOptions { get; } = new()
+    {
+        ExplorerViewListOption,
+        ExplorerViewTreeOption
+    };
 
     public string TransferQueueSummary
     {
@@ -431,70 +537,50 @@ public partial class SessionViewModel : ViewModelBase
         if (credentials is null)
             return;
 
+        var resolvedAuthOrder = AuthPreferenceOrder.Normalize(credentials.AuthPreferenceOrder, suggestion.UsePrivateKey);
         var resolvedPassword = credentials.Password ?? string.Empty;
         var resolvedKeyPassphrase = credentials.PrivateKeyPassphrase ?? string.Empty;
-        var resolvedKeyPath = credentials.PrivateKeyPath ?? string.Empty;
-        var needsSavedSecret =
-            credentials.UsePrivateKey
-                ? string.IsNullOrEmpty(resolvedKeyPassphrase)
-                : string.IsNullOrEmpty(resolvedPassword);
+        var resolvedKeyPath = string.IsNullOrWhiteSpace(credentials.PrivateKeyPath)
+            ? suggestion.PrivateKeyPath
+            : credentials.PrivateKeyPath;
+        var needsSavedPassword = string.IsNullOrEmpty(resolvedPassword) &&
+                                 resolvedAuthOrder.Contains(AuthMethodPreference.Password);
+        var needsSavedKeyPassphrase = string.IsNullOrEmpty(resolvedKeyPassphrase) &&
+                                      resolvedAuthOrder.Contains(AuthMethodPreference.PrivateKey) &&
+                                      !string.IsNullOrWhiteSpace(resolvedKeyPath);
 
-        var savedSecrets = new CredentialSecrets();
-        if (needsSavedSecret)
+        if (needsSavedPassword || needsSavedKeyPassphrase)
         {
             var verified = await _userVerificationService.VerifyForConnectionAsync(suggestion);
-            if (!verified)
-                return;
-
-            savedSecrets = await _profileManager.LoadCredentialsAsync(suggestion.Id) ?? new CredentialSecrets();
-        }
-
-        var shouldPersistSecrets = false;
-        var passwordToPersist = string.Empty;
-        var keyPassphraseToPersist = string.Empty;
-
-        if (credentials.UsePrivateKey)
-        {
-            if (string.IsNullOrWhiteSpace(resolvedKeyPath))
-                resolvedKeyPath = suggestion.PrivateKeyPath;
-
-            if (string.IsNullOrWhiteSpace(resolvedKeyPath))
+            if (verified)
             {
-                await _dialogService.ConfirmAsync("Missing Key Path",
-                    "Private key path is required for key authentication.");
-                return;
+                var savedSecrets = await _profileManager.LoadCredentialsAsync(suggestion.Id) ?? new CredentialSecrets();
+                if (string.IsNullOrEmpty(resolvedPassword))
+                    resolvedPassword = savedSecrets.Password ?? string.Empty;
+
+                if (string.IsNullOrEmpty(resolvedKeyPassphrase))
+                    resolvedKeyPassphrase = savedSecrets.PrivateKeyPassphrase ?? string.Empty;
             }
-
-            if (string.IsNullOrEmpty(resolvedKeyPassphrase))
-                resolvedKeyPassphrase = needsSavedSecret ? savedSecrets.PrivateKeyPassphrase ?? string.Empty : string.Empty;
-
-            resolvedPassword = string.Empty;
-            keyPassphraseToPersist = resolvedKeyPassphrase;
-            shouldPersistSecrets = !string.IsNullOrEmpty(credentials.PrivateKeyPassphrase);
         }
-        else
+
+        if (!string.IsNullOrEmpty(credentials.Password) || !string.IsNullOrEmpty(credentials.PrivateKeyPassphrase))
         {
-            if (string.IsNullOrEmpty(resolvedPassword))
-                resolvedPassword = needsSavedSecret ? savedSecrets.Password ?? string.Empty : string.Empty;
-
-            if (string.IsNullOrEmpty(resolvedPassword))
-            {
-                await _dialogService.ConfirmAsync("Missing Password",
-                    "No saved password found. Enter a password or enable key authentication.");
-                return;
-            }
-
-            resolvedKeyPath = string.Empty;
-            resolvedKeyPassphrase = string.Empty;
-            passwordToPersist = resolvedPassword;
-            shouldPersistSecrets = !string.IsNullOrEmpty(credentials.Password);
-        }
-
-        if (shouldPersistSecrets)
+            var existingSecrets = await _profileManager.LoadCredentialsAsync(suggestion.Id) ?? new CredentialSecrets();
+            var passwordToPersist =
+                !string.IsNullOrEmpty(credentials.Password)
+                    ? credentials.Password
+                    : existingSecrets.Password ?? string.Empty;
+            var keyPassphraseToPersist =
+                !string.IsNullOrEmpty(credentials.PrivateKeyPassphrase)
+                    ? credentials.PrivateKeyPassphrase
+                    : existingSecrets.PrivateKeyPassphrase ?? string.Empty;
             await _profileManager.SaveCredentialsAsync(suggestion.Id, passwordToPersist, keyPassphraseToPersist);
+        }
 
         suggestion.Username = credentials.Username;
-        suggestion.UsePrivateKey = credentials.UsePrivateKey;
+        suggestion.AuthPreferenceOrder = new List<AuthMethodPreference>(resolvedAuthOrder);
+        suggestion.UsePrivateKey = resolvedAuthOrder.Count > 0 &&
+                                   resolvedAuthOrder[0] == AuthMethodPreference.PrivateKey;
         suggestion.PrivateKeyPath = resolvedKeyPath;
         suggestion.Password = string.Empty;
         suggestion.PrivateKeyPassphrase = string.Empty;
@@ -503,8 +589,8 @@ public partial class SessionViewModel : ViewModelBase
             new ConnectInfo
             {
                 Username = credentials.Username,
+                AuthPreferenceOrder = resolvedAuthOrder,
                 Password = resolvedPassword,
-                UsePrivateKey = credentials.UsePrivateKey,
                 PrivateKeyPath = resolvedKeyPath,
                 PrivateKeyPassphrase = resolvedKeyPassphrase
             };
@@ -518,9 +604,16 @@ public partial class SessionViewModel : ViewModelBase
         Profile.Name = suggestion.Name;
         Profile.Host = suggestion.Host;
         Profile.Port = suggestion.Port;
+        Profile.ConnectionTimeoutSeconds = suggestion.ConnectionTimeoutSeconds;
+        Profile.KeepAliveIntervalSeconds = suggestion.KeepAliveIntervalSeconds;
+        Profile.ReconnectStrategy = suggestion.ReconnectStrategy;
+        Profile.ReconnectAttempts = suggestion.ReconnectAttempts;
+        Profile.ReconnectDelaySeconds = suggestion.ReconnectDelaySeconds;
         Profile.Username = credentials.Username;
+        Profile.AuthPreferenceOrder = AuthPreferenceOrder.Normalize(credentials.AuthPreferenceOrder, suggestion.UsePrivateKey);
         Profile.Password = credentials.Password;
-        Profile.UsePrivateKey = credentials.UsePrivateKey;
+        Profile.UsePrivateKey = Profile.AuthPreferenceOrder.Count > 0 &&
+                                Profile.AuthPreferenceOrder[0] == AuthMethodPreference.PrivateKey;
         Profile.PrivateKeyPath = credentials.PrivateKeyPath;
         Profile.PrivateKeyPassphrase = credentials.PrivateKeyPassphrase;
 
@@ -639,8 +732,16 @@ public partial class SessionViewModel : ViewModelBase
     [RelayCommand]
     private async Task Disconnect()
     {
+        CancelSearch();
+        CancelTreeLoad();
         await _sftpService.DisconnectAsync();
         IsConnected = false;
+        IsSearchInProgress = false;
+        IsTreeLoading = false;
+        _allFiles.Clear();
+        _recursiveSearchResults.Clear();
+        TreeItems.Clear();
+        SelectedTreeNode = null;
         Files.Clear();
         StatusMessage = "Disconnected";
     }
@@ -671,8 +772,10 @@ public partial class SessionViewModel : ViewModelBase
             StatusMessage = "Listing directory...";
             var files = await _sftpService.ListDirectoryAsync(newPath);
             CurrentPath = newPath;
-            _allFiles = files;
-            ApplyFileFilter();
+            _allFiles = MapEntriesToCurrentPath(files, newPath);
+            await RefreshSearchResultsAsync(debounce: false);
+            if (IsTreeView)
+                RebuildTreeRootFromCurrentList();
         }
         catch (Exception ex)
         {
@@ -687,8 +790,10 @@ public partial class SessionViewModel : ViewModelBase
         try
         {
             StatusMessage = "Listing directory...";
-            _allFiles = await _sftpService.ListDirectoryAsync(CurrentPath);
-            ApplyFileFilter();
+            _allFiles = MapEntriesToCurrentPath(await _sftpService.ListDirectoryAsync(CurrentPath), CurrentPath);
+            await RefreshSearchResultsAsync(debounce: false);
+            if (IsTreeView)
+                RebuildTreeRootFromCurrentList();
         }
         catch (Exception ex)
         {
@@ -697,33 +802,426 @@ public partial class SessionViewModel : ViewModelBase
         }
     }
 
+    private async Task RefreshSearchResultsAsync(bool debounce)
+    {
+        CancelSearch();
+
+        var query = SearchQuery.Trim();
+        var useRecursiveSearch = IsConnected && SearchRecursive && !string.IsNullOrWhiteSpace(query);
+        if (!useRecursiveSearch)
+        {
+            _recursiveSearchResults.Clear();
+            IsSearchInProgress = false;
+            ApplyFileFilter();
+            return;
+        }
+
+        var revision = ++_searchRevision;
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+
+        IsSearchInProgress = true;
+        _recursiveSearchResults.Clear();
+        ApplyFileFilter();
+
+        try
+        {
+            if (debounce)
+                await Task.Delay(RecursiveSearchDebounceMs, cts.Token);
+
+            var results = await SearchRemoteTreeAsync(CurrentPath, query, cts.Token);
+            if (cts.IsCancellationRequested || revision != _searchRevision)
+                return;
+
+            _recursiveSearchResults = results;
+            ApplyFileFilter();
+        }
+        catch (OperationCanceledException)
+        {
+            // New search request superseded the previous one.
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Error("Recursive search failed", ex);
+            StatusMessage = $"Search Error: {ex.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_searchCts, cts))
+            {
+                _searchCts = null;
+                IsSearchInProgress = false;
+                ApplyFileFilter();
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    private async Task<List<FileEntry>> SearchRemoteTreeAsync(string rootPath,
+        string query,
+        CancellationToken cancellationToken)
+    {
+        var normalizedRoot = NormalizeRemoteAbsolutePath(rootPath);
+        var pendingDirectories = new Queue<string>();
+        var visitedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var matches = new List<FileEntry>();
+        pendingDirectories.Enqueue(normalizedRoot);
+
+        var visitedCount = 0;
+        while (pendingDirectories.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var directoryPath = pendingDirectories.Dequeue();
+            if (!visitedDirectories.Add(directoryPath))
+                continue;
+
+            visitedCount++;
+            if (visitedCount > RecursiveSearchDirectoryLimit)
+                throw new InvalidOperationException($"Search stopped after {RecursiveSearchDirectoryLimit} directories.");
+
+            if (visitedCount % 12 == 0)
+                StatusMessage = $"Searching '{query}'... {visitedCount} folders scanned, {matches.Count} matches";
+
+            List<FileEntry> entries;
+            try
+            {
+                entries = await _sftpService.ListDirectoryAsync(directoryPath);
+            }
+            catch (Exception ex)
+            {
+                LoggingService.Warn($"Search skipped '{directoryPath}': {ex.Message}");
+                continue;
+            }
+
+            foreach (var entry in entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!ShowHiddenFiles && entry.IsHidden)
+                    continue;
+
+                var entryRemotePath = NormalizeRemoteAbsolutePath(CombineRemotePath(directoryPath, entry.Name));
+                var relativePath = BuildRelativePath(normalizedRoot, entryRemotePath);
+                var sourceText = string.IsNullOrEmpty(relativePath) ? entry.Name : relativePath;
+
+                if (ContainsText(sourceText, query) || ContainsText(entry.Name, query))
+                {
+                    matches.Add(
+                        new FileEntry
+                        {
+                            Name = sourceText,
+                            RemotePath = entryRemotePath,
+                            IsDirectory = entry.IsDirectory,
+                            IsSymbolicLink = entry.IsSymbolicLink,
+                            SymbolicLinkTarget = entry.SymbolicLinkTarget,
+                            SymbolicLinkTargetIsDirectory = entry.SymbolicLinkTargetIsDirectory,
+                            Size = entry.Size,
+                            Permissions = entry.Permissions,
+                            LastWriteTime = entry.LastWriteTime
+                        });
+                }
+
+                if (entry.IsDirectory && !entry.IsSymbolicLink)
+                    pendingDirectories.Enqueue(entryRemotePath);
+            }
+        }
+
+        return matches
+            .OrderByDescending(entry => entry.IsDirectory)
+            .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool ContainsText(string value,
+        string query)
+    {
+        return value.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildRelativePath(string rootPath,
+        string fullPath)
+    {
+        var normalizedRoot = NormalizeRemoteAbsolutePath(rootPath);
+        var normalizedFull = NormalizeRemoteAbsolutePath(fullPath);
+
+        if (normalizedRoot == "/")
+            return normalizedFull.TrimStart('/');
+
+        var prefix = normalizedRoot + "/";
+        if (normalizedFull.StartsWith(prefix, StringComparison.Ordinal))
+            return normalizedFull[prefix.Length..];
+
+        if (string.Equals(normalizedFull, normalizedRoot, StringComparison.Ordinal))
+            return Path.GetFileName(normalizedFull);
+
+        return normalizedFull.TrimStart('/');
+    }
+
+    private static bool IsTreeExplorerOption(string value)
+    {
+        return value.Contains("Tree", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void CancelSearch()
+    {
+        if (_searchCts is null)
+            return;
+
+        try
+        {
+            _searchCts.Cancel();
+            _searchCts.Dispose();
+        }
+        catch
+        {
+            // Ignore cancellation races.
+        }
+        finally
+        {
+            _searchCts = null;
+        }
+    }
+
+    private void CancelTreeLoad()
+    {
+        if (_treeLoadCts is null)
+            return;
+
+        try
+        {
+            _treeLoadCts.Cancel();
+            _treeLoadCts.Dispose();
+        }
+        catch
+        {
+            // Ignore cancellation races.
+        }
+        finally
+        {
+            _treeLoadCts = null;
+        }
+    }
+
+    private static List<FileEntry> MapEntriesToCurrentPath(IEnumerable<FileEntry> files,
+        string basePath)
+    {
+        var normalizedBasePath = NormalizeRemoteAbsolutePath(basePath);
+        return files
+            .Select(
+                file =>
+                    new FileEntry
+                    {
+                        Name = file.Name,
+                        RemotePath =
+                            string.IsNullOrWhiteSpace(file.RemotePath)
+                                ? CombineRemotePath(normalizedBasePath, file.Name)
+                                : NormalizeRemoteAbsolutePath(file.RemotePath),
+                        IsDirectory = file.IsDirectory,
+                        IsSymbolicLink = file.IsSymbolicLink,
+                        SymbolicLinkTarget = file.SymbolicLinkTarget,
+                        SymbolicLinkTargetIsDirectory = file.SymbolicLinkTargetIsDirectory,
+                        Size = file.Size,
+                        Permissions = file.Permissions,
+                        LastWriteTime = file.LastWriteTime
+                    })
+            .ToList();
+    }
+
+    private List<RemoteTreeNode> BuildTreeNodes(IEnumerable<FileEntry> entries,
+        string parentPath)
+    {
+        return entries
+            .Where(file => ShowHiddenFiles || !file.IsHidden)
+            .OrderByDescending(file => file.IsDirectory)
+            .ThenBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(
+                file =>
+                {
+                    var remotePath =
+                        string.IsNullOrWhiteSpace(file.RemotePath)
+                            ? CombineRemotePath(parentPath, file.Name)
+                            : NormalizeRemoteAbsolutePath(file.RemotePath);
+                    var mappedEntry =
+                        new FileEntry
+                        {
+                            Name = file.Name,
+                            RemotePath = remotePath,
+                            IsDirectory = file.IsDirectory,
+                            IsSymbolicLink = file.IsSymbolicLink,
+                            SymbolicLinkTarget = file.SymbolicLinkTarget,
+                            SymbolicLinkTargetIsDirectory = file.SymbolicLinkTargetIsDirectory,
+                            Size = file.Size,
+                            Permissions = file.Permissions,
+                            LastWriteTime = file.LastWriteTime
+                        };
+                    return new RemoteTreeNode(mappedEntry);
+                })
+            .ToList();
+    }
+
+    private void RebuildTreeRootFromCurrentList()
+    {
+        CancelTreeLoad();
+        _treeLoadCts = new CancellationTokenSource();
+        IsTreeLoading = false;
+        SelectedTreeNode = null;
+        TreeItems.Clear();
+
+        foreach (var node in BuildTreeNodes(_allFiles, CurrentPath))
+            TreeItems.Add(node);
+    }
+
+    public async Task ExpandTreeNodeAsync(RemoteTreeNode? node)
+    {
+        if (!IsConnected || node is null || node.IsPlaceholder || !node.IsDirectory || node.IsSymbolicLink)
+            return;
+        if (node.IsLoaded || node.IsLoading)
+            return;
+
+        var token = _treeLoadCts?.Token ?? CancellationToken.None;
+        node.IsLoading = true;
+        IsTreeLoading = true;
+
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            var entries = await _sftpService.ListDirectoryAsync(node.RemotePath);
+            token.ThrowIfCancellationRequested();
+            var mapped = MapEntriesToCurrentPath(entries, node.RemotePath);
+            var children = BuildTreeNodes(mapped, node.RemotePath);
+            node.Children.Clear();
+            foreach (var child in children)
+                node.Children.Add(child);
+            node.IsLoaded = true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Tree was refreshed/cancelled.
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Warn($"Tree expand failed for '{node.RemotePath}': {ex.Message}");
+            node.Children.Clear();
+            node.IsLoaded = true;
+        }
+        finally
+        {
+            node.IsLoading = false;
+            IsTreeLoading = false;
+        }
+    }
+
+    private bool IsRecursiveSearchActive =>
+        IsConnected && SearchRecursive && !string.IsNullOrWhiteSpace(SearchQuery);
+
+    private bool IsFlatFilterActive =>
+        !string.IsNullOrWhiteSpace(SearchQuery) && !SearchRecursive;
+
     private void ApplyFileFilter()
     {
         Files.Clear();
 
-        if (CurrentPath != "/")
+        var source = IsRecursiveSearchActive ? _recursiveSearchResults : _allFiles;
+        IEnumerable<FileEntry> filtered = source.Where(file => ShowHiddenFiles || !file.IsHidden);
+
+        if (IsFlatFilterActive)
+        {
+            var query = SearchQuery.Trim();
+            filtered =
+                filtered.Where(
+                    file =>
+                        ContainsText(file.Name, query) ||
+                        ContainsText(file.RemotePath, query));
+        }
+
+        if (!IsRecursiveSearchActive && CurrentPath != "/")
         {
             Files.Add(new FileEntry { Name = "..", IsDirectory = true });
         }
 
-        foreach (var file in _allFiles.Where(file => ShowHiddenFiles || !file.IsHidden))
+        foreach (var file in filtered)
         {
             Files.Add(file);
         }
 
-        StatusMessage = $"Showing {Files.Count} items";
+        var visibleCount = Files.Count(entry => entry.Name != "..");
+        if (IsRecursiveSearchActive)
+        {
+            StatusMessage =
+                IsSearchInProgress
+                    ? $"Searching '{SearchQuery}'... {visibleCount} matches so far"
+                    : $"Recursive search '{SearchQuery}': {visibleCount} matches";
+            return;
+        }
+
+        if (IsFlatFilterActive)
+        {
+            StatusMessage = $"Filtered '{SearchQuery}': {visibleCount} matches";
+            return;
+        }
+
+        StatusMessage = $"Showing {visibleCount} items";
+    }
+
+    private string GetEntryRemotePath(FileEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.RemotePath))
+            return NormalizeRemoteAbsolutePath(entry.RemotePath);
+
+        return CombineRemotePath(CurrentPath, entry.Name);
     }
 
     public async Task OpenItem(FileEntry entry)
     {
+        if (entry.IsSymbolicLink)
+        {
+            var entryPath = GetEntryRemotePath(entry);
+            var decision = await _dialogService.ConfirmSymlinkBehaviorAsync(
+                "Open symbolic link",
+                $"'{entry.Name}' is a symbolic link. Choose how to open it.",
+                BuildSymlinkActionDetails(entry, entryPath),
+                allowApplyToAll: false);
+
+            if (decision.Choice == SymlinkBehaviorChoice.Cancel)
+                return;
+
+            if (decision.Choice == SymlinkBehaviorChoice.OperateOnLinkEntry)
+            {
+                StatusMessage = $"Selected symbolic link: {entryPath}";
+                return;
+            }
+
+            var followPath = await ResolveSymbolicLinkFollowPathAsync(entryPath, CancellationToken.None);
+            var followInfo = await _sftpService.GetEntryInfoAsync(followPath);
+            if (followInfo.IsDirectory)
+            {
+                await Navigate(followPath);
+            }
+            else
+            {
+                StatusMessage = $"Link target file: {followPath}";
+            }
+
+            return;
+        }
+
         if (entry.IsDirectory)
         {
-            await Navigate(entry.Name);
+            var targetPath = entry.Name == ".." ? ".." : GetEntryRemotePath(entry);
+            await Navigate(targetPath);
         }
         else
         {
-            StatusMessage = $"Selected file: {entry.Name}";
+            StatusMessage = $"Selected file: {GetEntryRemotePath(entry)}";
         }
+    }
+
+    [RelayCommand]
+    private void ClearSearch()
+    {
+        SearchQuery = string.Empty;
     }
 
     [RelayCommand]
@@ -791,8 +1289,9 @@ public partial class SessionViewModel : ViewModelBase
 
         try
         {
-            var oldPath = CurrentPath.EndsWith('/') ? CurrentPath + target.Name : $"{CurrentPath}/{target.Name}";
-            var newPath = CurrentPath.EndsWith('/') ? CurrentPath + newName : $"{CurrentPath}/{newName}";
+            var oldPath = GetEntryRemotePath(target);
+            var parentPath = GetRemoteParentPath(oldPath);
+            var newPath = CombineRemotePath(parentPath, newName);
 
             await _sftpService.RenameFileAsync(oldPath, newPath);
             await RefreshFileList();
@@ -806,13 +1305,97 @@ public partial class SessionViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private async Task ShowProperties(FileEntry? file)
+    {
+        if (!IsConnected) return;
+
+        var target = file ?? SelectedFile ?? SelectedTreeNode?.Entry;
+        if (target is null || target.Name == "..")
+            return;
+
+        var targetPath = GetEntryRemotePath(target);
+        try
+        {
+            var current = await _sftpService.GetPosixAttributesAsync(targetPath);
+            var request =
+                new RemotePropertiesDialogRequest
+                {
+                    Name = target.Name,
+                    RemotePath = targetPath,
+                    IsDirectory = current.IsDirectory,
+                    Size = current.Size,
+                    LastWriteTime = current.LastWriteTime,
+                    SymbolicPermissions = current.SymbolicPermissions,
+                    OctalPermissions = current.OctalPermissions,
+                    UserId = current.UserId,
+                    OwnerName = current.OwnerName,
+                    GroupId = current.GroupId,
+                    GroupName = current.GroupName
+                };
+
+            var result = await _dialogService.ShowRemotePropertiesDialogAsync(request);
+            if (result is null)
+                return;
+
+            if (!result.ApplyPermissions && !result.ApplyOwnerId && !result.ApplyGroupId)
+            {
+                StatusMessage = "No property changes selected";
+                return;
+            }
+
+            short? applyPermissions = result.ApplyPermissions ? result.PermissionMode : null;
+            int? applyOwner = result.ApplyOwnerId ? result.OwnerId : null;
+            int? applyGroup = result.ApplyGroupId ? result.GroupId : null;
+            var applyRecursive = result.ApplyRecursively && current.IsDirectory;
+
+            var targets =
+                await BuildAttributeApplyTargetsAsync(
+                    targetPath,
+                    applyRecursive,
+                    CancellationToken.None);
+            if (targets.Count == 0)
+            {
+                StatusMessage = "Nothing to update";
+                return;
+            }
+
+            var orderedTargets =
+                applyRecursive
+                    ? targets
+                        .OrderBy(t => t.IsDirectory ? 1 : 0)
+                        .ThenByDescending(t => GetRemotePathDepth(t.RemotePath))
+                        .ToList()
+                    : targets;
+
+            for (var i = 0; i < orderedTargets.Count; i++)
+            {
+                var applyTarget = orderedTargets[i];
+                StatusMessage = $"Applying properties {i + 1}/{orderedTargets.Count}: {applyTarget.DisplayName}";
+                await _sftpService.SetPosixAttributesAsync(
+                    applyTarget.RemotePath,
+                    applyPermissions,
+                    applyOwner,
+                    applyGroup);
+            }
+
+            await RefreshFileList();
+            StatusMessage =
+                $"Updated properties for {orderedTargets.Count} item{(orderedTargets.Count == 1 ? "" : "s")}";
+        }
+        catch (Exception ex)
+        {
+            LoggingService.Error("Update properties failed", ex);
+            StatusMessage = $"Properties Error: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
     private async Task Delete(FileEntry? file)
     {
         if (!IsConnected) return;
         var rawTargets = GetSelectedTargets(file);
         if (rawTargets.Count is 0) return;
-        var basePath = CurrentPath;
-        var targets = FilterDeleteTargets(rawTargets, basePath);
+        var targets = FilterDeleteTargets(rawTargets);
         if (targets.Count is 0) return;
 
         var confirm =
@@ -822,17 +1405,34 @@ public partial class SessionViewModel : ViewModelBase
                     $"Are you sure you want to delete {targets.Count} items?");
         if (!confirm) return;
 
+        var symlinkChoices = await ResolveDeleteSymlinkChoicesAsync(targets);
+        if (symlinkChoices.Cancelled)
+        {
+            StatusMessage = "Delete cancelled";
+            return;
+        }
+
         var request =
             new DeleteJobRequest
             {
-                BaseRemotePath = basePath,
+                BaseRemotePath = CurrentPath,
                 Targets =
                     targets.Select(t =>
-                        new DeleteTargetSnapshot
+                    {
+                        var remotePath = GetEntryRemotePath(t);
+                        var followTarget =
+                            symlinkChoices.FollowTargetByPath.TryGetValue(remotePath, out var followChoice) &&
+                            followChoice;
+
+                        return new DeleteTargetSnapshot
                         {
                             Name = t.Name,
-                            IsDirectory = t.IsDirectory
-                        }).ToList()
+                            RemotePath = remotePath,
+                            IsDirectory = t.IsDirectory,
+                            IsSymbolicLink = t.IsSymbolicLink,
+                            FollowSymlinkTarget = followTarget
+                        };
+                    }).ToList()
             };
 
         EnqueueTransfer(CreateDeleteTransferDefinition(request));
@@ -849,8 +1449,11 @@ public partial class SessionViewModel : ViewModelBase
                 new ClipboardItem
                 {
                     Name = t.Name,
-                    Path = CurrentPath.EndsWith('/') ? CurrentPath + t.Name : $"{CurrentPath}/{t.Name}",
+                    Path = GetEntryRemotePath(t),
                     IsDirectory = t.IsDirectory,
+                    IsSymbolicLink = t.IsSymbolicLink,
+                    SymbolicLinkTarget = t.SymbolicLinkTarget,
+                    SymbolicLinkTargetIsDirectory = t.SymbolicLinkTargetIsDirectory,
                     Size = t.Size,
                     LastWriteTime = t.LastWriteTime
                 }).ToList();
@@ -859,8 +1462,7 @@ public partial class SessionViewModel : ViewModelBase
         StatusMessage = _clipboardItems.Count == 1 ? $"Copied: {targets[0].Name}" : $"Copied {targets.Count} items";
     }
 
-    private List<FileEntry> FilterDeleteTargets(IReadOnlyList<FileEntry> targets,
-        string basePath)
+    private List<FileEntry> FilterDeleteTargets(IReadOnlyList<FileEntry> targets)
     {
         if (targets.Count <= 1)
             return targets.ToList();
@@ -868,13 +1470,13 @@ public partial class SessionViewModel : ViewModelBase
         var uniqueTargetsByPath = new Dictionary<string, FileEntry>(StringComparer.Ordinal);
         foreach (var target in targets)
         {
-            var targetPath = NormalizeRemoteAbsolutePath(CombineRemotePath(basePath, target.Name));
+            var targetPath = GetEntryRemotePath(target);
             if (!uniqueTargetsByPath.ContainsKey(targetPath))
                 uniqueTargetsByPath[targetPath] = target;
         }
 
         var directoryRoots = uniqueTargetsByPath
-            .Where(kvp => kvp.Value.IsDirectory)
+            .Where(kvp => kvp.Value.IsDirectory && !kvp.Value.IsSymbolicLink)
             .Select(kvp => kvp.Key)
             .ToList();
 
@@ -893,6 +1495,107 @@ public partial class SessionViewModel : ViewModelBase
         return filtered;
     }
 
+    private async Task<(bool Cancelled, Dictionary<string, bool> FollowTargetByPath)> ResolveDeleteSymlinkChoicesAsync(
+        IReadOnlyList<FileEntry> targets)
+    {
+        var symlinkTargets = targets.Where(target => target.IsSymbolicLink).ToList();
+        var followTargetByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (symlinkTargets.Count == 0)
+            return (false, followTargetByPath);
+
+        SymlinkBehaviorChoice? applyChoiceToAll = null;
+
+        foreach (var symlinkTarget in symlinkTargets)
+        {
+            var path = GetEntryRemotePath(symlinkTarget);
+            SymlinkBehaviorChoice choice;
+            if (applyChoiceToAll is { } allChoice)
+            {
+                choice = allChoice;
+            }
+            else
+            {
+                var details = BuildSymlinkActionDetails(symlinkTarget, path);
+                var decision = await _dialogService.ConfirmSymlinkBehaviorAsync(
+                    "Delete symbolic link",
+                    $"'{symlinkTarget.Name}' is a symbolic link. Choose delete behavior.",
+                    details,
+                    allowApplyToAll: symlinkTargets.Count > 1);
+                choice = decision.Choice;
+
+                if (decision.ApplyToAll && choice != SymlinkBehaviorChoice.Cancel)
+                    applyChoiceToAll = choice;
+            }
+
+            if (choice == SymlinkBehaviorChoice.Cancel)
+                return (true, followTargetByPath);
+
+            followTargetByPath[path] = choice == SymlinkBehaviorChoice.FollowLinkTarget;
+        }
+
+        return (false, followTargetByPath);
+    }
+
+    private static string BuildSymlinkActionDetails(FileEntry symlinkEntry,
+        string remotePath)
+    {
+        var targetText = string.IsNullOrWhiteSpace(symlinkEntry.SymbolicLinkTarget)
+            ? "Target: unresolved"
+            : $"Target: {symlinkEntry.SymbolicLinkTarget}";
+        var targetType = symlinkEntry.SymbolicLinkTargetIsDirectory ? "directory" : "file/unknown";
+        return
+            $"Path: {remotePath}{Environment.NewLine}{targetText}{Environment.NewLine}Follow target type: {targetType}";
+    }
+
+    private static string BuildSymlinkActionDetails(ClipboardItem symlinkItem,
+        string remotePath)
+    {
+        var targetText = string.IsNullOrWhiteSpace(symlinkItem.SymbolicLinkTarget)
+            ? "Target: unresolved"
+            : $"Target: {symlinkItem.SymbolicLinkTarget}";
+        var targetType = symlinkItem.SymbolicLinkTargetIsDirectory ? "directory" : "file/unknown";
+        return
+            $"Path: {remotePath}{Environment.NewLine}{targetText}{Environment.NewLine}Follow target type: {targetType}";
+    }
+
+    private async Task<string> EnsureClipboardSymlinkTargetAsync(ClipboardItem symlinkItem)
+    {
+        if (!string.IsNullOrWhiteSpace(symlinkItem.SymbolicLinkTarget))
+            return symlinkItem.SymbolicLinkTarget;
+
+        var target = await _sftpService.GetSymbolicLinkTargetAsync(symlinkItem.Path);
+        if (string.IsNullOrWhiteSpace(target))
+            throw new InvalidOperationException($"Unable to resolve symbolic link target for '{symlinkItem.Path}'.");
+
+        symlinkItem.SymbolicLinkTarget = target;
+        return target;
+    }
+
+    private async Task<bool> ResolveClipboardSymlinkTargetIsDirectoryAsync(ClipboardItem symlinkItem)
+    {
+        if (symlinkItem.SymbolicLinkTargetIsDirectory)
+            return true;
+
+        var targetInfo = await _sftpService.GetEntryInfoAsync(symlinkItem.Path);
+        symlinkItem.SymbolicLinkTargetIsDirectory = targetInfo.IsDirectory;
+        return targetInfo.IsDirectory;
+    }
+
+    private async Task<string> ResolveSymbolicLinkFollowPathAsync(string symbolicLinkPath,
+        CancellationToken cancellationToken)
+    {
+        var rawTargetPath = await _sftpService.GetSymbolicLinkTargetAsync(symbolicLinkPath, cancellationToken);
+        if (string.IsNullOrWhiteSpace(rawTargetPath))
+            throw new InvalidOperationException($"Unable to resolve symbolic link target for '{symbolicLinkPath}'.");
+
+        var normalizedRawTarget = rawTargetPath.Trim();
+        if (normalizedRawTarget.StartsWith('/'))
+            return NormalizeRemotePathWithDotSegments(normalizedRawTarget);
+
+        var parentPath = GetRemoteParentPath(symbolicLinkPath);
+        return NormalizeRemotePathWithDotSegments(CombineRemotePath(parentPath, normalizedRawTarget));
+    }
+
     private async Task<List<DeletePlanItem>> BuildDeletePlanAsync(IReadOnlyList<DeleteTargetSnapshot> targets,
         string basePath,
         CancellationToken cancellationToken)
@@ -903,7 +1606,41 @@ public partial class SessionViewModel : ViewModelBase
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var targetPath = NormalizeRemoteAbsolutePath(CombineRemotePath(basePath, target.Name));
+            var targetPath = NormalizeRemoteAbsolutePath(target.RemotePath);
+            if (target.IsSymbolicLink)
+            {
+                if (!target.FollowSymlinkTarget)
+                {
+                    plan.Add(
+                        new DeletePlanItem
+                        {
+                            RemotePath = targetPath,
+                            DisplayName = $"{BuildDeleteDisplayName(targetPath, basePath)} (link)",
+                            IsDirectory = false
+                        });
+                    continue;
+                }
+
+                var followPath = await ResolveSymbolicLinkFollowPathAsync(targetPath, cancellationToken);
+                var followInfo = await _sftpService.GetEntryInfoAsync(followPath);
+                if (followInfo.IsDirectory)
+                {
+                    await AppendDirectoryDeletePlanAsync(followPath, basePath, plan, cancellationToken);
+                }
+                else
+                {
+                    plan.Add(
+                        new DeletePlanItem
+                        {
+                            RemotePath = followPath,
+                            DisplayName = $"{BuildDeleteDisplayName(followPath, basePath)} (via link)",
+                            IsDirectory = false
+                        });
+                }
+
+                continue;
+            }
+
             if (target.IsDirectory)
                 await AppendDirectoryDeletePlanAsync(targetPath, basePath, plan, cancellationToken);
             else
@@ -931,7 +1668,7 @@ public partial class SessionViewModel : ViewModelBase
         {
             cancellationToken.ThrowIfCancellationRequested();
             var entryPath = NormalizeRemoteAbsolutePath(CombineRemotePath(directoryPath, entry.Name));
-            if (entry.IsDirectory)
+            if (entry.IsDirectory && !entry.IsSymbolicLink)
             {
                 await AppendDirectoryDeletePlanAsync(entryPath, basePath, plan, cancellationToken);
             }
@@ -941,7 +1678,10 @@ public partial class SessionViewModel : ViewModelBase
                     new DeletePlanItem
                     {
                         RemotePath = entryPath,
-                        DisplayName = BuildDeleteDisplayName(entryPath, basePath),
+                        DisplayName =
+                            entry.IsSymbolicLink
+                                ? $"{BuildDeleteDisplayName(entryPath, basePath)} (link)"
+                                : BuildDeleteDisplayName(entryPath, basePath),
                         IsDirectory = false
                     });
             }
@@ -972,6 +1712,58 @@ public partial class SessionViewModel : ViewModelBase
         return normalizedRemotePath;
     }
 
+    private async Task<List<AttributeApplyTarget>> BuildAttributeApplyTargetsAsync(string rootPath,
+        bool recursive,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var normalizedRoot = NormalizeRemoteAbsolutePath(rootPath);
+        var rootInfo = await _sftpService.GetEntryInfoAsync(normalizedRoot);
+        var basePath = GetRemoteParentPath(normalizedRoot);
+        var targets =
+            new List<AttributeApplyTarget>
+            {
+                new()
+                {
+                    RemotePath = normalizedRoot,
+                    DisplayName = BuildDeleteDisplayName(normalizedRoot, basePath),
+                    IsDirectory = rootInfo.IsDirectory
+                }
+            };
+
+        if (!recursive || !rootInfo.IsDirectory)
+            return targets;
+
+        await AppendAttributeTargetsRecursiveAsync(normalizedRoot, basePath, targets, cancellationToken);
+        return targets;
+    }
+
+    private async Task AppendAttributeTargetsRecursiveAsync(string directoryPath,
+        string basePath,
+        ICollection<AttributeApplyTarget> targets,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var entries = await _sftpService.ListDirectoryAsync(directoryPath);
+
+        foreach (var entry in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entryPath = NormalizeRemoteAbsolutePath(CombineRemotePath(directoryPath, entry.Name));
+            targets.Add(
+                new AttributeApplyTarget
+                {
+                    RemotePath = entryPath,
+                    DisplayName = BuildDeleteDisplayName(entryPath, basePath),
+                    IsDirectory = entry.IsDirectory
+                });
+
+            if (entry.IsDirectory && !entry.IsSymbolicLink)
+                await AppendAttributeTargetsRecursiveAsync(entryPath, basePath, targets, cancellationToken);
+        }
+    }
+
     private static DeleteJobRequest CloneDeleteJobRequest(DeleteJobRequest request)
     {
         return new DeleteJobRequest
@@ -983,7 +1775,10 @@ public partial class SessionViewModel : ViewModelBase
                         new DeleteTargetSnapshot
                         {
                             Name = t.Name,
-                            IsDirectory = t.IsDirectory
+                            RemotePath = t.RemotePath,
+                            IsDirectory = t.IsDirectory,
+                            IsSymbolicLink = t.IsSymbolicLink,
+                            FollowSymlinkTarget = t.FollowSymlinkTarget
                         })
                     .ToList()
         };
@@ -1193,6 +1988,9 @@ public partial class SessionViewModel : ViewModelBase
 
             var totalFiles = plan.Files.Count;
             var totalBytes = plan.Files.Sum(item => Math.Max(0, item.Size));
+            var shouldVerify = VerifyTransfersAfterTransfer;
+            var hashVerifiedFiles = 0;
+            var fallbackVerifiedFiles = 0;
             long downloadedBytesBeforeCurrent = 0;
             var downloadedFiles = 0;
 
@@ -1245,12 +2043,24 @@ public partial class SessionViewModel : ViewModelBase
                         ? downloadedBytesBeforeCurrent * 100.0 / totalBytes
                         : downloadedFiles * 100.0 / Math.Max(totalFiles, 1);
                 UpdateTransferUi(job, title, job.Status, progressValue);
+
+                if (shouldVerify)
+                {
+                    var verificationMode =
+                        await VerifyDownloadedFileAsync(job, item, fileNumber, totalFiles, progressValue, cancellationToken);
+                    if (verificationMode == VerificationMode.Hash)
+                        hashVerifiedFiles++;
+                    else
+                        fallbackVerifiedFiles++;
+                }
             }
 
             var doneText =
                 request.IsDirectory
                     ? $"Download complete ({downloadedFiles} file{(downloadedFiles == 1 ? "" : "s")})"
                     : $"Downloaded: {Path.GetFileName(resolvedLocalRoot)}";
+            if (shouldVerify && downloadedFiles > 0)
+                doneText = $"{doneText}, {BuildVerificationSummary(hashVerifiedFiles, fallbackVerifiedFiles)}";
             UpdateTransferUi(job, doneText, doneText, 100);
         }
         catch (OperationCanceledException)
@@ -1321,6 +2131,9 @@ public partial class SessionViewModel : ViewModelBase
             }
 
             var totalBytes = plan.Files.Sum(f => Math.Max(0, f.Size));
+            var shouldVerify = VerifyTransfersAfterTransfer;
+            var hashVerifiedFiles = 0;
+            var fallbackVerifiedFiles = 0;
             long uploadedBytesBeforeCurrent = 0;
             var uploadedFiles = 0;
 
@@ -1332,6 +2145,7 @@ public partial class SessionViewModel : ViewModelBase
                 var fileNumber = uploadedFiles + 1;
                 var title = $"Uploading {fileNumber}/{totalFiles}: {item.DisplayName}";
                 UpdateTransferUi(job, title, title);
+                var uploadRemotePath = item.AtomicTempRemotePath ?? item.RemotePath;
 
                 var progress =
                     new Progress<double>(p =>
@@ -1356,19 +2170,52 @@ public partial class SessionViewModel : ViewModelBase
                             overallPercent);
                     });
 
-                await UploadFileWithRetriesAsync(job, item, progress, cancellationToken);
+                try
+                {
+                    await UploadFileWithRetriesAsync(job, item, uploadRemotePath, progress, cancellationToken);
 
-                uploadedBytesBeforeCurrent += fileSize;
-                uploadedFiles++;
-                var overall =
-                    totalBytes > 0
-                        ? uploadedBytesBeforeCurrent * 100.0 / totalBytes
-                        : uploadedFiles * 100.0 / Math.Max(totalFiles, 1);
-                UpdateTransferUi(job, title, job.Status, overall);
+                    uploadedBytesBeforeCurrent += fileSize;
+                    uploadedFiles++;
+                    var overall =
+                        totalBytes > 0
+                            ? uploadedBytesBeforeCurrent * 100.0 / totalBytes
+                            : uploadedFiles * 100.0 / Math.Max(totalFiles, 1);
+                    UpdateTransferUi(job, title, job.Status, overall);
+
+                    if (shouldVerify)
+                    {
+                        var verificationMode =
+                            await VerifyUploadedFileAsync(
+                                job,
+                                item,
+                                uploadRemotePath,
+                                fileNumber,
+                                totalFiles,
+                                overall,
+                                cancellationToken);
+                        if (verificationMode == VerificationMode.Hash)
+                            hashVerifiedFiles++;
+                        else
+                            fallbackVerifiedFiles++;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(item.AtomicTempRemotePath))
+                    {
+                        await FinalizeAtomicUploadAsync(job, item, fileNumber, totalFiles, overall, cancellationToken);
+                    }
+                }
+                catch
+                {
+                    if (!string.IsNullOrWhiteSpace(item.AtomicTempRemotePath))
+                        await TryDeleteRemoteFileQuietAsync(item.AtomicTempRemotePath);
+                    throw;
+                }
             }
 
             var doneText =
                 $"Upload complete ({uploadedFiles} file{(uploadedFiles == 1 ? "" : "s")}, {totalDirectories} folder{(totalDirectories == 1 ? "" : "s")})";
+            if (shouldVerify && uploadedFiles > 0)
+                doneText = $"{doneText}, {BuildVerificationSummary(hashVerifiedFiles, fallbackVerifiedFiles)}";
             UpdateTransferUi(job, "Upload complete", doneText, 100);
         }
         finally
@@ -1380,6 +2227,7 @@ public partial class SessionViewModel : ViewModelBase
 
     private async Task UploadFileWithRetriesAsync(TransferJob job,
         UploadItem item,
+        string uploadRemotePath,
         IProgress<double> progress,
         CancellationToken cancellationToken)
     {
@@ -1392,7 +2240,7 @@ public partial class SessionViewModel : ViewModelBase
             {
                 await _sftpService.UploadFileAsync(
                     item.LocalPath,
-                    item.RemotePath,
+                    uploadRemotePath,
                     progress,
                     cancellationToken,
                     resume: true);
@@ -1462,6 +2310,163 @@ public partial class SessionViewModel : ViewModelBase
         throw lastException ?? new InvalidOperationException($"Download failed for {item.DisplayName}.");
     }
 
+    private async Task FinalizeAtomicUploadAsync(TransferJob job,
+        UploadItem item,
+        int fileNumber,
+        int totalFiles,
+        double progressValue,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(item.AtomicTempRemotePath))
+            return;
+
+        var title = $"Finalizing {fileNumber}/{totalFiles}: {item.DisplayName}";
+        UpdateTransferUi(job, title, $"Finalizing atomic replace for {item.DisplayName}...", progressValue);
+        await _sftpService.PromoteUploadedFileAtomicallyAsync(
+            item.AtomicTempRemotePath,
+            item.RemotePath,
+            cancellationToken);
+        item.AtomicTempRemotePath = null;
+        UpdateTransferUi(job, title, $"Finalized {item.DisplayName}", progressValue);
+    }
+
+    private async Task<VerificationMode> VerifyUploadedFileAsync(TransferJob job,
+        UploadItem item,
+        string uploadedRemotePath,
+        int fileNumber,
+        int totalFiles,
+        double progressValue,
+        CancellationToken cancellationToken)
+    {
+        var title = $"Verifying {fileNumber}/{totalFiles}: {item.DisplayName}";
+        UpdateTransferUi(job, title, $"Verifying {item.DisplayName}...", progressValue);
+
+        var localInfo = new FileInfo(item.LocalPath);
+        if (!localInfo.Exists)
+            throw new InvalidOperationException(
+                $"Integrity verification failed for '{item.DisplayName}': local file is missing.");
+
+        var remoteInfo = await _sftpService.GetEntryInfoAsync(uploadedRemotePath);
+        if (remoteInfo.IsDirectory)
+            throw new InvalidOperationException(
+                $"Integrity verification failed for '{item.DisplayName}': remote path is a directory.");
+
+        if (remoteInfo.Size != localInfo.Length)
+        {
+            throw new InvalidOperationException(
+                $"Integrity verification failed for '{item.DisplayName}': size mismatch (local {localInfo.Length:N0} bytes, remote {remoteInfo.Size:N0} bytes).");
+        }
+
+        if (localInfo.Length <= HashVerificationThresholdBytes)
+        {
+            var localHash = await ComputeLocalFileSha256Async(item.LocalPath, cancellationToken);
+            var remoteHash = await _sftpService.ComputeRemoteFileSha256Async(uploadedRemotePath, cancellationToken);
+            if (!string.Equals(localHash, remoteHash, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Integrity verification failed for '{item.DisplayName}': SHA-256 mismatch.");
+            }
+
+            UpdateTransferUi(job, title, $"Verified {item.DisplayName}: SHA-256 OK", progressValue);
+            return VerificationMode.Hash;
+        }
+
+        var fallbackStatus =
+            FormatSizeAndTimeVerificationStatus(
+                localInfo.LastWriteTimeUtc,
+                remoteInfo.LastWriteTime.ToUniversalTime());
+        UpdateTransferUi(job, title, $"Verified {item.DisplayName}: {fallbackStatus}", progressValue);
+        return VerificationMode.SizeAndTimeFallback;
+    }
+
+    private async Task<VerificationMode> VerifyDownloadedFileAsync(TransferJob job,
+        DownloadFilePlanItem item,
+        int fileNumber,
+        int totalFiles,
+        double progressValue,
+        CancellationToken cancellationToken)
+    {
+        var title = $"Verifying {fileNumber}/{totalFiles}: {item.DisplayName}";
+        UpdateTransferUi(job, title, $"Verifying {item.DisplayName}...", progressValue);
+
+        var remoteInfo = await _sftpService.GetEntryInfoAsync(item.RemotePath);
+        if (remoteInfo.IsDirectory)
+            throw new InvalidOperationException(
+                $"Integrity verification failed for '{item.DisplayName}': remote path is a directory.");
+
+        var localInfo = new FileInfo(item.LocalPath);
+        if (!localInfo.Exists)
+            throw new InvalidOperationException(
+                $"Integrity verification failed for '{item.DisplayName}': downloaded file is missing.");
+
+        if (remoteInfo.Size != localInfo.Length)
+        {
+            TryDeleteLocalPath(item.LocalPath);
+            throw new InvalidOperationException(
+                $"Integrity verification failed for '{item.DisplayName}': size mismatch (remote {remoteInfo.Size:N0} bytes, local {localInfo.Length:N0} bytes).");
+        }
+
+        if (remoteInfo.Size <= HashVerificationThresholdBytes)
+        {
+            var localHash = await ComputeLocalFileSha256Async(item.LocalPath, cancellationToken);
+            var remoteHash = await _sftpService.ComputeRemoteFileSha256Async(item.RemotePath, cancellationToken);
+            if (!string.Equals(localHash, remoteHash, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDeleteLocalPath(item.LocalPath);
+                throw new InvalidOperationException(
+                    $"Integrity verification failed for '{item.DisplayName}': SHA-256 mismatch.");
+            }
+
+            UpdateTransferUi(job, title, $"Verified {item.DisplayName}: SHA-256 OK", progressValue);
+            return VerificationMode.Hash;
+        }
+
+        var fallbackStatus =
+            FormatSizeAndTimeVerificationStatus(
+                remoteInfo.LastWriteTime.ToUniversalTime(),
+                localInfo.LastWriteTimeUtc);
+        UpdateTransferUi(job, title, $"Verified {item.DisplayName}: {fallbackStatus}", progressValue);
+        return VerificationMode.SizeAndTimeFallback;
+    }
+
+    private static async Task<string> ComputeLocalFileSha256Async(string localPath,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
+        using var sha = SHA256.Create();
+        var hash = await sha.ComputeHashAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash);
+    }
+
+    private static string FormatSizeAndTimeVerificationStatus(DateTime sourceUtc,
+        DateTime targetUtc)
+    {
+        if (sourceUtc == DateTime.MinValue || targetUtc == DateTime.MinValue)
+            return "size/time fallback OK (timestamp unavailable)";
+
+        var delta = (sourceUtc - targetUtc).Duration();
+        if (delta <= VerificationTimestampTolerance)
+            return "size/time fallback OK";
+
+        return $"size/time fallback OK (timestamp delta {delta.TotalMinutes:F1} min)";
+    }
+
+    private static string BuildVerificationSummary(int hashVerifiedFiles,
+        int fallbackVerifiedFiles)
+    {
+        var totalVerified = hashVerifiedFiles + fallbackVerifiedFiles;
+        if (totalVerified <= 0)
+            return "verification skipped";
+
+        if (hashVerifiedFiles > 0 && fallbackVerifiedFiles > 0)
+            return $"verification: {totalVerified} OK ({hashVerifiedFiles} hash, {fallbackVerifiedFiles} size/time)";
+
+        if (hashVerifiedFiles > 0)
+            return $"verification: {hashVerifiedFiles} hash";
+
+        return $"verification: {fallbackVerifiedFiles} size/time";
+    }
+
     [RelayCommand]
     private void Cut(FileEntry? file)
     {
@@ -1473,8 +2478,11 @@ public partial class SessionViewModel : ViewModelBase
                 new ClipboardItem
                 {
                     Name = t.Name,
-                    Path = CurrentPath.EndsWith('/') ? CurrentPath + t.Name : $"{CurrentPath}/{t.Name}",
+                    Path = GetEntryRemotePath(t),
                     IsDirectory = t.IsDirectory,
+                    IsSymbolicLink = t.IsSymbolicLink,
+                    SymbolicLinkTarget = t.SymbolicLinkTarget,
+                    SymbolicLinkTargetIsDirectory = t.SymbolicLinkTargetIsDirectory,
                     Size = t.Size,
                     LastWriteTime = t.LastWriteTime
                 }).ToList();
@@ -1497,28 +2505,68 @@ public partial class SessionViewModel : ViewModelBase
         var destinationFolder = CurrentPath;
         if (targetFolder is { IsDirectory: true } && targetFolder.Name != "..")
         {
-            destinationFolder =
-                CurrentPath.EndsWith('/')
-                    ? CurrentPath + targetFolder.Name
-                    : $"{CurrentPath}/{targetFolder.Name}";
+            destinationFolder = GetEntryRemotePath(targetFolder);
         }
 
         try
         {
+            SymlinkBehaviorChoice? copySymlinkChoiceToAll = null;
+
             foreach (var item in _clipboardItems)
             {
                 var fileName = item.Name;
                 var destPath =
                     destinationFolder.EndsWith('/') ? destinationFolder + fileName : $"{destinationFolder}/{fileName}";
 
+                var copyAsLinkEntry = false;
+                var sourceIsDirectory = item.IsDirectory;
+                if (!_clipboardIsCut && item.IsSymbolicLink)
+                {
+                    SymlinkBehaviorChoice behaviorChoice;
+                    if (copySymlinkChoiceToAll is { } presetChoice)
+                    {
+                        behaviorChoice = presetChoice;
+                    }
+                    else
+                    {
+                        var details = BuildSymlinkActionDetails(item, item.Path);
+                        var decision = await _dialogService.ConfirmSymlinkBehaviorAsync(
+                            "Copy symbolic link",
+                            $"'{item.Name}' is a symbolic link. Choose copy behavior.",
+                            details,
+                            allowApplyToAll: _clipboardItems.Count(clipboardItem => clipboardItem.IsSymbolicLink) > 1);
+                        behaviorChoice = decision.Choice;
+
+                        if (decision.ApplyToAll && behaviorChoice != SymlinkBehaviorChoice.Cancel)
+                            copySymlinkChoiceToAll = behaviorChoice;
+                    }
+
+                    if (behaviorChoice == SymlinkBehaviorChoice.Cancel)
+                    {
+                        StatusMessage = "Paste cancelled";
+                        return;
+                    }
+
+                    if (behaviorChoice == SymlinkBehaviorChoice.OperateOnLinkEntry)
+                    {
+                        copyAsLinkEntry = true;
+                        sourceIsDirectory = false;
+                    }
+                    else
+                    {
+                        sourceIsDirectory = await ResolveClipboardSymlinkTargetIsDirectoryAsync(item);
+                    }
+                }
+
                 if (item.Path == destPath) continue;
 
                 LoggingService.Info(
-                    $"Paste start: source={item.Path} dest={destPath} cut={_clipboardIsCut} isDir={item.IsDirectory}");
+                    $"Paste start: source={item.Path} dest={destPath} cut={_clipboardIsCut} isDir={sourceIsDirectory} isSymlink={item.IsSymbolicLink} asLink={copyAsLinkEntry}");
 
                 if (await _sftpService.PathExistsAsync(destPath))
                 {
-                    var choice = await PromptConflictAsync(item, destPath);
+                    var sourceInfo = (sourceIsDirectory, item.Size, item.LastWriteTime);
+                    var choice = await PromptConflictAsync(item.Name, sourceInfo, destPath);
 
                     if (choice == ConflictChoice.Cancel)
                     {
@@ -1549,7 +2597,12 @@ public partial class SessionViewModel : ViewModelBase
                 else
                 {
                     StatusMessage = $"Copying {fileName}...";
-                    if (item.IsDirectory)
+                    if (copyAsLinkEntry)
+                    {
+                        var linkTarget = await EnsureClipboardSymlinkTargetAsync(item);
+                        await _sftpService.CreateSymbolicLinkAsync(linkTarget, destPath);
+                    }
+                    else if (sourceIsDirectory)
                     {
                         await _sftpService.CopyDirectoryAsync(item.Path, destPath);
                     }
@@ -1664,6 +2717,25 @@ public partial class SessionViewModel : ViewModelBase
         }
     }
 
+    private async Task<string> BuildUniqueAtomicUploadTempPathAsync(string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        var normalizedDestination = NormalizeRemoteAbsolutePath(destinationPath);
+        var parentPath = GetRemoteParentPath(normalizedDestination);
+        var destinationFileName = Path.GetFileName(normalizedDestination.TrimEnd('/'));
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var candidateName =
+                $"{AtomicUploadTempPrefix}-{destinationFileName}.{Guid.NewGuid():N}.part";
+            var candidatePath = CombineRemotePath(parentPath, candidateName);
+            if (!await _sftpService.PathExistsAsync(candidatePath))
+                return candidatePath;
+        }
+    }
+
     private static string GetUniqueLocalDestinationPath(string destinationFolder,
         string fileName)
     {
@@ -1731,6 +2803,19 @@ public partial class SessionViewModel : ViewModelBase
         catch
         {
             // Best-effort cleanup for overwritten/canceled local downloads.
+        }
+    }
+
+    private async Task TryDeleteRemoteFileQuietAsync(string remotePath)
+    {
+        try
+        {
+            if (await _sftpService.PathExistsAsync(remotePath))
+                await _sftpService.DeleteFileAsync(remotePath);
+        }
+        catch
+        {
+            // Best effort cleanup for temporary upload artifacts.
         }
     }
 
@@ -1820,6 +2905,10 @@ public partial class SessionViewModel : ViewModelBase
         }
 
         var target = targets[0];
+        var targetRemotePath = GetEntryRemotePath(target);
+        var targetName = Path.GetFileName(targetRemotePath.TrimEnd('/'));
+        if (string.IsNullOrWhiteSpace(targetName))
+            targetName = target.Name;
 
         var localFolder = await _dialogService.PickFolderAsync();
         if (string.IsNullOrEmpty(localFolder)) return;
@@ -1827,11 +2916,11 @@ public partial class SessionViewModel : ViewModelBase
         var request =
             new DownloadJobRequest
             {
-                Name = target.Name,
+                Name = targetName,
                 IsDirectory = target.IsDirectory,
                 Size = target.Size,
                 LastWriteTime = target.LastWriteTime,
-                RemotePath = CombineRemotePath(CurrentPath, target.Name),
+                RemotePath = targetRemotePath,
                 LocalFolder = localFolder
             };
 
@@ -1912,7 +3001,7 @@ public partial class SessionViewModel : ViewModelBase
             var localEntryPath = Path.Combine(localDirectoryPath, entry.Name);
             var displayName = $"{displayPrefix}/{entry.Name}";
 
-            if (entry.IsDirectory)
+            if (entry.IsDirectory && !entry.IsSymbolicLink)
             {
                 await AppendDirectoryDownloadPlanAsync(
                     remoteEntryPath,
@@ -1984,17 +3073,7 @@ public partial class SessionViewModel : ViewModelBase
             {
                 var fileInfo = new FileInfo(localPath);
                 var fileName = fileInfo.Name;
-                var remoteTargetPath = CombineRemotePath(destinationPath, fileName);
-                var sourceInfo = (IsDirectory: false, Size: fileInfo.Length, LastWriteTime: fileInfo.LastWriteTime);
-                var resolvedTargetPath =
-                    await ResolveUploadConflictAsync(
-                        fileName,
-                        sourceInfo,
-                        remoteTargetPath,
-                        destinationPath,
-                        cancellationToken);
-                if (resolvedTargetPath is null)
-                    return null;
+                var resolvedTargetPath = NormalizeRemoteAbsolutePath(CombineRemotePath(destinationPath, fileName));
 
                 targets.Add(
                     new UploadSourceTarget
@@ -2141,6 +3220,7 @@ public partial class SessionViewModel : ViewModelBase
             cancellationToken.ThrowIfCancellationRequested();
 
             var item = plan.Files[i];
+            item.AtomicTempRemotePath = null;
             var checkTitle = $"Checking conflicts {i + 1}/{plan.Files.Count}";
             UpdateTransferUi(job, checkTitle, $"Checking {item.DisplayName}");
 
@@ -2180,14 +3260,19 @@ public partial class SessionViewModel : ViewModelBase
                 var destinationFolder = GetRemoteParentPath(item.RemotePath);
                 var fileName = Path.GetFileName(item.RemotePath);
                 item.RemotePath = await GetUniqueDestinationPathAsync(destinationFolder, fileName);
+                item.AtomicTempRemotePath = null;
                 continue;
             }
 
             UpdateTransferUi(job, checkTitle, $"Replacing {item.DisplayName}");
             if (destinationInfo.IsDirectory)
+            {
                 await _sftpService.DeleteDirectoryAsync(item.RemotePath);
-            else
-                await _sftpService.DeleteFileAsync(item.RemotePath);
+                continue;
+            }
+
+            item.AtomicTempRemotePath =
+                await BuildUniqueAtomicUploadTempPathAsync(item.RemotePath, cancellationToken);
         }
 
         return true;
@@ -2348,6 +3433,35 @@ public partial class SessionViewModel : ViewModelBase
             normalized = normalized.TrimEnd('/');
 
         return normalized;
+    }
+
+    private static string NormalizeRemotePathWithDotSegments(string remotePath)
+    {
+        var normalized = NormalizeRemoteAbsolutePath(remotePath);
+        if (normalized == "/")
+            return normalized;
+
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var stack = new Stack<string>();
+        foreach (var segment in segments)
+        {
+            if (segment == ".")
+                continue;
+
+            if (segment == "..")
+            {
+                if (stack.Count > 0)
+                    stack.Pop();
+                continue;
+            }
+
+            stack.Push(segment);
+        }
+
+        if (stack.Count == 0)
+            return "/";
+
+        return "/" + string.Join("/", stack.Reverse());
     }
 
     private static StringComparer GetPathComparerForCurrentPlatform()
